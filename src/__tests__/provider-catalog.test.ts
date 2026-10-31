@@ -77,12 +77,13 @@ describe("v2 built-in provider catalog", () => {
 		]);
 	});
 
-	test("orders OpenAI, Z.AI, DeepSeek, and OpenCode Go providers", () => {
+	test("orders OpenAI, Z.AI, DeepSeek, OpenCode Go, and OpenRouter providers", () => {
 		expect(BUILTIN_PROVIDER_CATALOG.map((entry) => entry.metadata.id)).toEqual([
 			"openai",
 			"zai",
 			"deepseek",
 			"opencode-go",
+			"openrouter",
 		]);
 	});
 

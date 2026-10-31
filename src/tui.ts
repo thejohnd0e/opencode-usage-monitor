@@ -251,7 +251,7 @@ function buildHeaderRight(
 function orderedProviders(
 	providers: Record<ProviderId, StandardUsageProvider>,
 ): StandardUsageProvider[] {
-	const preferred = ["openai", "zai", "deepseek"];
+	const preferred = ["openai", "zai", "deepseek", "openrouter"];
 	return Object.values(providers).sort((left, right) => {
 		const leftIndex = preferred.indexOf(left.id);
 		const rightIndex = preferred.indexOf(right.id);

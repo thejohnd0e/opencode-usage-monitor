@@ -1,5 +1,8 @@
 # opencode-usage-monitor
 
+> Personal fork of [Mark1708/opencode-usage-monitor](https://github.com/Mark1708/opencode-usage-monitor) `v3.1.0` (MIT).
+> Changes on top of upstream: minute-level reset countdowns that degrade by unit on narrow rows, and an OpenRouter provider. See [Fork changes](#fork-changes).
+
 [Русская версия](./README.ru.md)
 
 > OpenCode TUI sidebar plugin that shows OpenAI, Z.AI / GLM, DeepSeek, and OpenCode Go quota/balance usage without exposing provider credentials in the UI.
@@ -34,12 +37,32 @@ The plugin renders inside the OpenCode terminal UI sidebar.
 - Displays Z.AI and GLM 5h/week/month quota windows with reset timing and optional plan details. Supports enterprise/org coding plans via organization and project scoping.
 - Displays DeepSeek account balance (CNY) with an optional granted/topped-up breakdown.
 - Displays OpenCode Go 5h/week/month usage windows with reset timing.
+- Displays OpenRouter key budget usage (day/week/month) with a reset countdown plus `spent` and `credits` USD rows (fork addition).
 - Standardizes provider output as explicit usage windows plus typed provider-owned details; DeepSeek balance is displayed as a balance detail rather than a reset window.
 - Discovers credentials from OpenCode auth storage and supported environment variables.
 - Redacts secrets from error messages before rendering them in the TUI.
 - Rejects raw provider attribute dumps in runtime snapshots; providers must map safe attributes into ordered details.
 - Uses stale-data indicators and guarded refreshes to avoid overlapping API calls.
 - Supports two-level collapse/expand behavior: the full panel and per-provider detail views.
+
+## Fork changes
+
+Everything below is added on top of upstream `v3.1.0`; the panel layout, providers and configuration format are otherwise unchanged.
+
+- **Reset countdowns reach minutes.** `formatReset` renders `reset 38m`, `reset 4h 12m`, `reset 5d 3h 12m`, `reset now`, using the provider's existing `resetAt` — no extra request. Zero subunits are dropped (`reset 4h`, not `reset 4h 0m`).
+- **Narrow rows degrade by unit, not by character.** When the countdown does not fit the configured `width`, the smallest unit is dropped (`reset 5d 18h`) instead of cutting a number mid-token (`reset 5d 18h 1…`). Only `reset …` suffixes change; other suffixes keep upstream behavior.
+- **OpenRouter provider.** Reads `GET https://openrouter.ai/api/v1/key` and maps the key's `effective_budget` (`limit_usd`, `spend_usd`, `reset_interval`, `resets_at`) to a `day`/`week`/`month` window with a percentage and countdown, plus `spent` and `credits` (best effort from `GET /api/v1/credits`) USD rows. Request counts are not part of the public payload, so the percentage is budget spend. 401/403 map to `forbidden`.
+- **Tests.** `src/__tests__/openrouter.test.ts` and the countdown cases in `src/__tests__/layout.test.ts`; the provider-catalog order test now includes OpenRouter.
+
+Known local-only difference that is deliberately **not** included here: routing OpenAI usage through a sibling `codex-limits` RPC instead of the HTTP call. It depends on a separate private plugin and is not needed for the changes above.
+
+Provider setup for the new adapter:
+
+```json
+"providers": { "openrouter": {} }
+```
+
+The credential comes from the stored OpenCode `openrouter` login; for an environment fallback set `OPENROUTER_API_KEY`. OpenRouter answers `403 Access denied by security policy` to sanctioned regions, so the OpenCode process needs the egress your setup already uses (for example a Proxifier rule); the plugin itself has no proxy option.
 
 ## Quick start
 
@@ -260,6 +283,18 @@ export OPENCODE_GO_API_KEY="your-opencode-go-key"
 ```
 
 The endpoint is read-only and currently used by OpenCode Go clients, but it is not documented as a stable public API. Future response changes may require a plugin update.
+
+### OpenRouter
+
+OpenRouter displays the current key's budget as a `day`, `week` or `month` window from `GET https://openrouter.ai/api/v1/key`: the percentage is `effective_budget.spend_usd / limit_usd` and the countdown uses `effective_budget.resets_at`. `spent` shows key usage in USD and `credits` shows `total_credits - total_usage` from `GET https://openrouter.ai/api/v1/credits` (best effort). A key without a budget keeps the money rows and drops the window.
+
+The stored OpenCode `openrouter` credential is preferred; for an environment fallback set:
+
+```sh
+export OPENROUTER_API_KEY="your-openrouter-key"
+```
+
+The API reports budget spend, not request counts, so no requests-per-day percentage is shown.
 
 
 ## Usage

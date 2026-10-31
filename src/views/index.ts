@@ -3,12 +3,14 @@ import type { ProviderUsageView } from "./types.js";
 import { openAIProviderToView } from "./openai-view.js";
 import { zaiProviderToView } from "./zai-view.js";
 import { deepseekProviderToView } from "./deepseek-view.js";
+import { openrouterProviderToView } from "./openrouter-view.js";
 import { metricSummary, statusView, stringMetric, toViewStatus, windowMetric } from "./common.js";
 
 export function providerToView(provider: StandardUsageProvider): ProviderUsageView {
   if (provider.id === "openai") return openAIProviderToView(provider);
   if (provider.id === "zai") return zaiProviderToView(provider);
   if (provider.id === "deepseek") return deepseekProviderToView(provider);
+  if (provider.id === "openrouter") return openrouterProviderToView(provider);
 
   const status = statusView(provider);
   if (status) return status;
