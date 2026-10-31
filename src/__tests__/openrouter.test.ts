@@ -183,15 +183,16 @@ describe("openrouter provider", () => {
 	});
 });
 
-describe("openrouter rendering", () => {
+	describe("openrouter rendering", () => {
 	const render = (spend: number, resetInMs: number, interval = "daily", width = TEST_WIDTH) => {
+		const now = nowMs();
 		const provider = normalizeOpenrouterUsage(
 			{
 				key: keyResponse({
-					effective_budget: { limit_usd: 50, spend_usd: spend, reset_interval: interval, resets_at: new Date(nowMs() + resetInMs).toISOString() },
+						effective_budget: { limit_usd: 50, spend_usd: spend, reset_interval: interval, resets_at: new Date(now + resetInMs).toISOString() },
 				}),
 			},
-			nowMs(),
+			now,
 		);
 		return formatProviderMetrics(providerToView(provider), CONFIG_DEFAULTS, width)
 			.map((line) => [line.text, line.suffix].filter(Boolean).join("  "))

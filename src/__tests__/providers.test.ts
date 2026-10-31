@@ -6,7 +6,7 @@ import {
 	deepseekUsageAdapter,
 	normalizeDeepseekBalance,
 } from "../providers/deepseek.js";
-import { normalizeWhamUsage, openAIUsageAdapter, openaiProviderDefinition } from "../providers/openai.js";
+import { normalizeWhamUsage, openAIUsageAdapter, openaiProviderDefinition, setOpenAIUsageReader } from "../providers/openai.js";
 import { normalizeZaiQuota, zaiUsageAdapter } from "../providers/zai.js";
 import { validateAndCloneUsageSnapshot } from "../snapshot-validation.js";
 import { providerToView } from "../views/index.js";
@@ -25,9 +25,48 @@ import {
 
 afterEach(() => {
 	restoreFetch();
+	setOpenAIUsageReader(undefined);
 });
 
 describe("provider normalization", () => {
+	test("uses the explicit Codex usage reader instead of making duplicate OpenAI requests", async () => {
+		const codexSnapshot = {
+			id: "openai",
+			displayName: "openai",
+			status: "ready" as const,
+			windows: [],
+			fetchedAt: 1_700_000_000_000,
+		};
+		let reads = 0;
+		setOpenAIUsageReader(async () => {
+			reads += 1;
+			return codexSnapshot;
+		});
+		globalThis.fetch = (() => {
+			throw new Error("duplicate ChatGPT request must not happen");
+		}) as unknown as typeof fetch;
+
+		const result = await openaiProviderDefinition.fetchUsage({
+			credential: {
+				secret: "selected-access-token",
+				source: "opencode",
+				variant: "openai",
+				epoch: 1,
+				metadata: {
+					accountId: "account-1",
+					type: "oauth",
+					expires: String(Date.now() + 60_000),
+				},
+			},
+			options: { show_resets: true, show_reset_expiry: false },
+			signal: new AbortController().signal,
+			timeoutMs: 1000,
+		});
+
+		expect(reads).toBe(1);
+		expect(result).toEqual(codexSnapshot);
+	});
+
 	test("OpenAI adapter returns StandardUsageProvider and reports missing auth", async () => {
 		mockJsonResponse(openAiFixture());
 		const provider = await openAIUsageAdapter.fetchUsage(

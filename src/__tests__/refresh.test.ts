@@ -217,6 +217,7 @@ class TestCache implements RefreshCache {
 type ProviderFixtureOptions = Readonly<{
 	order?: number;
 	scope?: CacheScopeMetadata | null | "credential";
+	credentialMode?: "required" | "none";
 }>;
 
 function provider(
@@ -247,6 +248,7 @@ function provider(
 	const binding: ProviderBinding = Object.freeze({
 		metadata,
 		credentialPolicy,
+		credentialMode: options.credentialMode ?? "required",
 		fetchUsage,
 		present: (): ProviderUsageView => ({
 			id,
@@ -267,6 +269,7 @@ function provider(
 	const registration: ProviderRegistration = Object.freeze({
 		metadata,
 		credentialPolicy,
+		credentialMode: options.credentialMode ?? "required",
 		parseOptions: (): ValidationResult<ProviderBinding> => ({
 			ok: true,
 			value: binding,
@@ -348,6 +351,45 @@ function invokeCommitFetchResult(
 }
 
 describe("deterministic provider refresh coordinator", () => {
+	test("host-backed providers bypass credentials and provider cache", async () => {
+		let hostCalls = 0;
+		const hostUsageLimits = async () => {
+			hostCalls += 1;
+			return { location: { directory: "/fixture" }, data: null };
+		};
+		const cache = new TestCache({ host: snapshot("host") });
+		const resolver = credentials({
+			ok: false,
+			kind: "missing",
+			message: "no Go key",
+			epoch: 0,
+		});
+		const selected = provider(
+			"host",
+			async (context) => {
+				await context.fetchHostUsageLimits?.(context.signal);
+				return snapshot("host");
+			},
+			{ credentialMode: "none" },
+		);
+		const coordinator = createRefreshCoordinator({
+			providers: [selected],
+			policy: POLICY_MANUAL,
+			credentialResolver: resolver,
+			cache,
+			fetchHostUsageLimits: hostUsageLimits,
+		});
+
+		await coordinator.refreshProvider("host");
+
+		expect(resolver.calls).toEqual([]);
+		expect(hostCalls).toBe(1);
+		expect(cache.reads).toEqual([]);
+		expect(cache.writes).toEqual([]);
+		expect(state(coordinator.getStates(), "host").status).toBe("ready");
+		coordinator.dispose();
+	});
+
 	test("manual bootstrap reads cache but performs zero startup fetches and isolates config errors", async () => {
 		let fetches = 0;
 		const valid = provider(

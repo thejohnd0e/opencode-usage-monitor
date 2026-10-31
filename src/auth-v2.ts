@@ -17,6 +17,8 @@ export interface V2OpenCodeCredentialReader {
 
 export type V2CredentialSourceOptions = Readonly<{
 	client: V2CredentialClient;
+	selectedOpenAICredentialID?: string;
+	refreshSelected?: () => Promise<unknown>;
 	/** How long normalized credential projections stay cached. */
 	ttlMs?: number;
 	now?: () => number;
@@ -56,8 +58,20 @@ export function createV2OpenCodeCredentialReader(
 		if (inFlight?.generation === requestedGeneration) return inFlight.promise;
 
 		const promise = (async () => {
+			let selectedOpenAIReady = true;
+			if (options.selectedOpenAICredentialID && options.refreshSelected) {
+				try {
+					await options.refreshSelected();
+				} catch {
+					selectedOpenAIReady = false;
+				}
+			}
 			const entries = await options.client.credential.list();
-			const projections = projectActiveCredentials(entries);
+			const projections = projectActiveCredentials(
+				entries,
+				options.selectedOpenAICredentialID,
+			);
+			if (!selectedOpenAIReady) projections.delete("openai");
 			if (generation === requestedGeneration) {
 				cache = Object.freeze({
 					generation: requestedGeneration,
@@ -96,10 +110,15 @@ export function createV2OpenCodeCredentialReader(
 
 function projectActiveCredentials(
 	entries: readonly V2CredentialEntry[],
-): ReadonlyMap<string, OpenCodeCredential> {
+	selectedOpenAICredentialID?: string,
+): Map<string, OpenCodeCredential> {
 	const projections = new Map<string, OpenCodeCredential>();
 	for (const entry of entries) {
-		if (!entry.active || projections.has(entry.integrationID)) continue;
+		const selected =
+			entry.integrationID === "openai" && selectedOpenAICredentialID
+				? entry.id === selectedOpenAICredentialID
+				: entry.active;
+		if (!selected || projections.has(entry.integrationID)) continue;
 		const projection = projectV2CredentialValue(entry.value);
 		if (projection) projections.set(entry.integrationID, projection);
 	}

@@ -1,6 +1,7 @@
 /// <reference types="bun" />
 
 import { describe, expect, test } from "bun:test";
+import type { Plugin } from "@opencode/plugin/tui";
 import {
 	createRenderEffect,
 	createRoot,
@@ -21,6 +22,19 @@ import usageTuiPlugin, {
 } from "../tui.js";
 import { providerToView } from "../views/index.js";
 import { TEST_WIDTH } from "./_helpers.js";
+
+type HostUsageLimits = Awaited<
+	ReturnType<Plugin.Context["client"]["experimental"]["usage"]["limits"]>
+>;
+
+function assertHostGoUsageShape(result: HostUsageLimits): void {
+	const go = result.data?.go;
+	if (go) {
+		void go.rolling?.percent;
+		void go.weekly?.percent;
+		void go.monthly?.percent;
+	}
+}
 
 const deepseekSnapshot: StandardUsageProvider = {
 	id: "deepseek",
@@ -113,6 +127,68 @@ function theme(base: string): ResolvedTestTheme {
 }
 
 describe("TUI runtime cutover", () => {
+	test("injects typed host usage fetch and does not call it after abort or disposal", async () => {
+		let hostCalls = 0;
+		let fetchHostUsageLimits:
+			| ((signal: AbortSignal) => Promise<unknown>)
+			| undefined;
+		const coordinator: RefreshCoordinator = {
+			refreshAll: async () => undefined,
+			refreshProvider: async () => undefined,
+			invalidateCredentials: () => undefined,
+			reconfigure: () => undefined,
+			getStates: () => [],
+			subscribe: () => () => undefined,
+			dispose: () => undefined,
+		};
+		const definition = createUsageTuiDefinition({
+			readRuntimeConfig: async () => ({
+				config: resolvedConfig,
+				render: { ...CONFIG_DEFAULTS },
+				providers: {},
+				fingerprint: "valid",
+			}),
+			createRuntimeCoordinator: (_config, _readers, fetcher) => {
+				fetchHostUsageLimits = fetcher;
+				return coordinator;
+			},
+			createCredentialReader: () => Object.assign(
+				async () => undefined,
+				{ invalidate: () => undefined },
+			),
+			watchConfig: () => undefined,
+			createReloadTrigger: (callback) => Object.assign(callback, { cancel: () => undefined }),
+		});
+		const context = {
+			client: {
+				experimental: {
+					usage: {
+						limits: async (_input: unknown, options: { signal?: AbortSignal }) => {
+							if (options.signal?.aborted) throw new Error("aborted");
+							hostCalls += 1;
+							return { location: { directory: "/fixture" }, data: null };
+						},
+					},
+				},
+			},
+			data: { on: () => () => undefined },
+			theme: theme("light"),
+			keymap: { layer: () => undefined },
+			ui: { slot: () => () => undefined, toast: { show: () => undefined } },
+		};
+		const cleanup = await Reflect.apply(definition.setup, undefined, [context]);
+		if (typeof cleanup !== "function") throw new Error("Expected cleanup");
+		if (!fetchHostUsageLimits) throw new Error("Expected host usage fetcher");
+		await fetchHostUsageLimits(new AbortController().signal);
+		const aborted = new AbortController();
+		aborted.abort();
+		await fetchHostUsageLimits(aborted.signal).catch(() => undefined);
+		await cleanup();
+		await fetchHostUsageLimits(new AbortController().signal).catch(() => undefined);
+
+		expect(hostCalls).toBe(1);
+	});
+
 	test("exports V2 definitions with only id and setup fields", () => {
 		expect(Object.keys(serverPlugin).sort()).toEqual(["id", "setup"]);
 		expect(Object.keys(usageTuiPlugin).sort()).toEqual(["id", "setup"]);

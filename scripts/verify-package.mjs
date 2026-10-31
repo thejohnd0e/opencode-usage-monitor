@@ -6,6 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(projectRoot, "package.json"), "utf8"));
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmOptions = { shell: process.platform === "win32" };
 const expectedIds = {
   "opencode-usage-monitor": ["usage-monitor", "usage-monitor.tui"],
   "opencode-agents-sidebar": ["agents-sidebar", "agents-sidebar.tui"],
@@ -18,9 +20,10 @@ const fixedTarball = join(artifactsDir, "package.tgz");
 rmSync(artifactsDir, { recursive: true, force: true });
 mkdirSync(artifactsDir, { recursive: true });
 
-const packOutput = execFileSync("npm", ["pack", "--json", "--pack-destination", artifactsDir], {
+const packOutput = execFileSync(npmCommand, ["pack", "--json", "--pack-destination", artifactsDir], {
   cwd: projectRoot,
   encoding: "utf8",
+  ...npmOptions,
 });
 const packResult = JSON.parse(packOutput);
 const tarballs = readdirSync(artifactsDir).filter((name) => name.endsWith(".tgz"));
@@ -30,7 +33,7 @@ if (!Array.isArray(packResult) || packResult.length !== 1 || tarballs.length !==
 renameSync(join(artifactsDir, tarballs[0]), fixedTarball);
 
 const archiveEntries = execFileSync("tar", ["-tzf", fixedTarball], { encoding: "utf8" })
-  .split("\n")
+  .split(/\r?\n/)
   .filter(Boolean);
 const entrySet = new Set(archiveEntries);
 for (const required of [
@@ -92,9 +95,9 @@ try {
     type: "module",
     dependencies: {
       [packageSpecifier]: pathToFileURL(fixedTarball).href,
-      "@opencode/theme": "2.0.32",
-      "@opentui/core": "0.5.17",
-      "@opentui/solid": "0.5.17",
+      "@opencode/theme": "2.2.5",
+      "@opentui/core": "0.8.0",
+      "@opentui/solid": "0.8.0",
       "solid-js": "1.9.12",
     },
     devDependencies: {
@@ -153,9 +156,16 @@ void [serverId, tuiId, serverSetup, tuiSetup];
     },
     files: ["consumer.ts"],
   }, null, 2));
-  execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: consumerDir, stdio: "inherit" });
+  execFileSync(npmCommand, ["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: consumerDir,
+    stdio: "inherit",
+    ...npmOptions,
+  });
   execFileSync("bun", ["run", "import-check.mjs"], { cwd: consumerDir, stdio: "inherit" });
-  execFileSync(join(consumerDir, "node_modules", ".bin", "tsc"), ["--project", "tsconfig.json"], { cwd: consumerDir, stdio: "inherit" });
+  execFileSync(process.execPath, [join(consumerDir, "node_modules", "typescript", "bin", "tsc"), "--project", "tsconfig.json"], {
+    cwd: consumerDir,
+    stdio: "inherit",
+  });
 } finally {
   rmSync(consumerDir, { recursive: true, force: true });
 }

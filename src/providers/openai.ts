@@ -32,6 +32,14 @@ const OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const OPENAI_RESET_CREDITS_URL =
 	"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const statusProvider = createStatusProvider("openai", "openai");
+type OpenAIUsageReader = () => Promise<StandardUsageProvider>;
+let openAIUsageReader: OpenAIUsageReader | undefined;
+
+export function setOpenAIUsageReader(
+	reader: OpenAIUsageReader | undefined,
+): void {
+	openAIUsageReader = reader;
+}
 
 export type OpenAIOptions = Readonly<{
 	show_resets: boolean;
@@ -102,6 +110,13 @@ async function fetchOpenAIUsage(
 	}
 	if (context.credential.variant !== "openai")
 		return statusProvider("error", "invalid credential variant");
+	if (openAIUsageReader) {
+		try {
+			return await openAIUsageReader();
+		} catch {
+			return statusProvider("error", "Codex statistics temporarily unavailable");
+		}
+	}
 	const accountId = context.credential.metadata?.accountId;
 	const type = context.credential.metadata?.type;
 	const expires = Number(context.credential.metadata?.expires);

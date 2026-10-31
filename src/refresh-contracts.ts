@@ -4,6 +4,7 @@ import type {
 } from "./config-types.js";
 import type { CredentialResolution } from "./credentials.js";
 import type { ProviderRegistration } from "./providers/contracts.js";
+import type { ExperimentalUsageLimitsOutput } from "@opencode/client";
 import type {
 	MonotonicClock,
 	OneShotTimers,
@@ -29,6 +30,9 @@ export type RefreshCoordinatorInput = Readonly<{
 	policy: ResolvedRefreshConfigV2;
 	credentialResolver: RefreshCredentialResolver;
 	cache: RefreshCache;
+	fetchHostUsageLimits?: (
+		signal: AbortSignal,
+	) => Promise<ExperimentalUsageLimitsOutput>;
 	clock?: MonotonicClock;
 	timers?: OneShotTimers;
 }>;

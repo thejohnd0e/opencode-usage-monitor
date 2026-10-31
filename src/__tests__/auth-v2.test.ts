@@ -16,7 +16,7 @@ const INTEGRATION_ID = Integration.ID.make("zai-coding-plan");
 
 function keyEntry(options: {
 	readonly id?: string;
-	readonly integrationID?: typeof INTEGRATION_ID;
+	readonly integrationID?: V2CredentialEntry["integrationID"];
 	readonly active?: boolean;
 	readonly key?: string;
 } = {}): V2CredentialEntry {
@@ -56,6 +56,51 @@ function deferred<T>(): {
 }
 
 describe("createV2OpenCodeCredentialReader", () => {
+	test("refreshes and selects only the explicitly configured OpenAI credential", async () => {
+		let refreshes = 0;
+		const reader = createV2OpenCodeCredentialReader({
+			client: clientWith([
+				keyEntry({
+					id: "cred_selected_openai",
+					integrationID: Integration.ID.make("openai"),
+					active: false,
+					key: "selected-openai-key",
+				}),
+				keyEntry({
+					id: "cred_other_openai",
+					integrationID: Integration.ID.make("openai"),
+					active: true,
+					key: "other-openai-key",
+				}),
+			]),
+			selectedOpenAICredentialID: "cred_selected_openai",
+			refreshSelected: async () => { refreshes += 1; },
+		});
+
+		expect(await reader("openai")).toEqual({
+			secret: "selected-openai-key",
+			metadata: { type: "key" },
+		});
+		expect(refreshes).toBe(1);
+	});
+
+	test("does not fall back to another OpenAI credential when selected refresh fails", async () => {
+		const reader = createV2OpenCodeCredentialReader({
+			client: clientWith([
+				keyEntry({
+					id: "cred_other_openai",
+					integrationID: Integration.ID.make("openai"),
+					active: true,
+					key: "other-openai-key",
+				}),
+			]),
+			selectedOpenAICredentialID: "cred_selected_openai",
+			refreshSelected: async () => { throw new Error("expired"); },
+		});
+
+		expect(await reader("openai")).toBeUndefined();
+	});
+
 	test("selects only the active integration credential and never falls back to inactive", async () => {
 		const active = createV2OpenCodeCredentialReader({
 			client: clientWith([

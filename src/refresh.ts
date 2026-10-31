@@ -50,6 +50,15 @@ import {
 	successfulRuntimeStatus,
 } from "./refresh-snapshot.js";
 
+// The existing fetch contract requires a lease; credentialMode "none" uses
+// this empty sentinel only for host-backed usage and never sends it anywhere.
+const HOST_USAGE_LEASE: CredentialLease = Object.freeze({
+	secret: "",
+	source: "opencode",
+	variant: "host-usage",
+	epoch: 0,
+});
+
 export type {
 	ProviderStateSubscriber,
 	RefreshCoordinator,
@@ -201,6 +210,24 @@ class DeterministicRefreshCoordinator implements RefreshCoordinator {
 		provider: SelectedResolvedProvider & { readonly ok: true },
 		generation: number,
 	): Promise<void> {
+		if (provider.registration.credentialMode === "none") {
+			const accountScope = `host:${provider.id}`;
+			const scope = Object.freeze({
+				scope: null,
+				persistentIdentity: null,
+			});
+			this.setContext(provider, HOST_USAGE_LEASE.epoch, accountScope, scope);
+			if (this.policy.mode === "automatic") {
+				void this.startWithLease(
+					provider,
+					generation,
+					HOST_USAGE_LEASE,
+					accountScope,
+					scope,
+				);
+			}
+			return;
+		}
 		const resolutionSequence = this.beginResolution(provider.id, false);
 		try {
 			const resolution = await this.resolveCredential(
@@ -280,6 +307,21 @@ class DeterministicRefreshCoordinator implements RefreshCoordinator {
 		provider: SelectedResolvedProvider & { readonly ok: true },
 		generation: number,
 	): Promise<void> {
+		if (provider.registration.credentialMode === "none") {
+			const accountScope = `host:${provider.id}`;
+			const scope = Object.freeze({
+				scope: null,
+				persistentIdentity: null,
+			});
+			await this.startWithLease(
+				provider,
+				generation,
+				HOST_USAGE_LEASE,
+				accountScope,
+				scope,
+			);
+			return;
+		}
 		const resolutionSequence = this.beginResolution(provider.id, true);
 		try {
 			if (
@@ -391,6 +433,7 @@ class DeterministicRefreshCoordinator implements RefreshCoordinator {
 				credential: lease,
 				signal: controller.signal,
 				timeoutMs: this.policy.timeout_ms,
+				fetchHostUsageLimits: this.input.fetchHostUsageLimits,
 			});
 			this.commitFetchResult(result, accountScope, scope, gate, lease.secret);
 		} catch (error: unknown) {
@@ -443,17 +486,20 @@ class DeterministicRefreshCoordinator implements RefreshCoordinator {
 			),
 		);
 		if (!this.canCommit(gate)) return;
-		safeCacheWrite(
-			this.input.cache,
-			makeTarget(
-				gate.id,
-				gate.generation,
-				gate.credentialEpoch,
-				accountScope,
-				scope.scope,
-			),
-			snapshot,
-		);
+		const selected = this.providers.find((provider) => provider.id === gate.id);
+		if (selected?.registration.credentialMode !== "none") {
+			safeCacheWrite(
+				this.input.cache,
+				makeTarget(
+					gate.id,
+					gate.generation,
+					gate.credentialEpoch,
+					accountScope,
+					scope.scope,
+				),
+				snapshot,
+			);
+		}
 	}
 	private commitFetchFailure(message: string, gate: CommitGate): void {
 		if (!this.canCommit(gate)) return;

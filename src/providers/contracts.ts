@@ -1,5 +1,6 @@
 import { sanitizeError } from "../sanitize.js";
 import type { ProviderUsageView } from "../views/types.js";
+import type { ExperimentalUsageLimitsOutput } from "@opencode/client";
 import type {
 	ProviderContext,
 	ProviderVisibilityConfigKey,
@@ -60,7 +61,14 @@ export type ProviderFetchExecutionContext = Readonly<{
 	credential: CredentialLease;
 	signal: AbortSignal;
 	timeoutMs: number;
+	fetchHostUsageLimits?: (
+		signal: AbortSignal,
+	) => Promise<ExperimentalUsageLimitsOutput>;
 }>;
+
+export type HostUsageLimitsFetcher = (
+	signal: AbortSignal,
+) => Promise<ExperimentalUsageLimitsOutput>;
 
 export type ProviderFetchContext<TOptions> = ProviderFetchExecutionContext &
 	Readonly<{
@@ -89,6 +97,7 @@ export type ProviderCacheMetadataContext<TOptions> = Readonly<{
 export interface ProviderBinding {
 	readonly metadata: ProviderMetadata;
 	readonly credentialPolicy: CredentialPolicy;
+	readonly credentialMode?: "required" | "none";
 	fetchUsage(
 		context: ProviderFetchExecutionContext,
 	): Promise<StandardUsageProvider>;
@@ -101,12 +110,14 @@ export interface ProviderBinding {
 export interface ProviderRegistration {
 	readonly metadata: ProviderMetadata;
 	readonly credentialPolicy: CredentialPolicy;
+	readonly credentialMode?: "required" | "none";
 	parseOptions(input: unknown): ValidationResult<ProviderBinding>;
 }
 
 export interface ProviderDefinition<TOptions> {
 	readonly metadata: ProviderMetadata;
 	readonly credentialPolicy: CredentialPolicy;
+	readonly credentialMode?: "required" | "none";
 	readonly registration: ProviderRegistration;
 	parseOptions(input: unknown): ValidationResult<TOptions>;
 	fetchUsage(
@@ -140,6 +151,7 @@ function createRegistration<TOptions>(
 	return Object.freeze({
 		metadata,
 		credentialPolicy,
+		credentialMode: definition.credentialMode ?? "required",
 		parseOptions: (input: unknown): ValidationResult<ProviderBinding> => {
 			const parsed = definition.parseOptions(input);
 			if (!parsed.ok) return parsed;
@@ -165,6 +177,7 @@ function createBinding<TOptions>(
 	return Object.freeze({
 		metadata,
 		credentialPolicy,
+		credentialMode: definition.credentialMode ?? "required",
 		fetchUsage: (context: ProviderFetchExecutionContext) =>
 			definition.fetchUsage({ ...context, options }),
 		present: (provider: StandardUsageProvider) => definition.present(provider),

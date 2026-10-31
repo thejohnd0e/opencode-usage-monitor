@@ -1,187 +1,136 @@
 /// <reference types="bun" />
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import type { ExperimentalUsageLimitsOutput } from "@opencode/client";
 
-import { createCredentialResolver } from "../credentials.js";
 import {
 	normalizeOpenCodeGoUsage,
 	opencodeGoProviderDefinition,
 } from "../providers/opencode-go.js";
 import { providerToView } from "../views/index.js";
-import { captureRequest, mockJsonResponse, restoreFetch } from "./_helpers.js";
-
-const GO_USAGE_FIXTURE = {
-	usage: {
-		rolling: {
-			status: "ok",
-			percent: 9,
-			resetsAt: "2026-09-03T04:30:00.000Z",
-		},
-		weekly: {
-			status: "rate-limited",
-			percent: 100,
-			resetsAt: "2026-09-07T00:00:00.000Z",
-		},
-		monthly: {
-			status: "ok",
-			percent: 31,
-			resetsAt: "2026-10-01T00:00:00.000Z",
-		},
-	},
-} as const;
 
 const NOW_MS = Date.parse("2026-09-03T00:00:00.000Z");
-
-afterEach(() => {
-	restoreFetch();
-});
+const HOST_USAGE_FIXTURE: ExperimentalUsageLimitsOutput = {
+	location: { directory: "/fixture" },
+	data: {
+		workspace: { id: "workspace-1", usageURL: "https://opencode.ai/usage" },
+		go: {
+			rolling: { percent: 0, limited: false, resetsAt: NOW_MS + 60_000 },
+			weekly: { percent: 0, limited: false, resetsAt: NOW_MS + 86_400_000 },
+			monthly: { percent: 6, limited: false, resetsAt: NOW_MS + 2_592_000_000 },
+		},
+		budgets: [],
+	},
+};
 
 describe("OpenCode Go provider", () => {
-	test("normalizes the official rolling, weekly, and monthly usage payload", () => {
-		const provider = normalizeOpenCodeGoUsage(GO_USAGE_FIXTURE, NOW_MS);
+	test("normalizes typed host limits into the existing three windows", () => {
+		const provider = normalizeOpenCodeGoUsage(HOST_USAGE_FIXTURE, NOW_MS);
 
-		expect(provider).toMatchObject({
-			id: "opencode-go",
-			displayName: "OpenCode Go",
-			status: "ready",
-			fetchedAt: NOW_MS,
-		});
-		expect(
-			provider.windows.map((window) => ({
-				label: window.label,
-				kind: window.kind,
-				percentage: window.percentage,
-				limitReached: window.limitReached,
-			})),
-		).toEqual([
-			{ label: "5h", kind: "rolling", percentage: 9, limitReached: undefined },
-			{ label: "week", kind: "weekly", percentage: 100, limitReached: true },
-			{ label: "month", kind: "monthly", percentage: 31, limitReached: undefined },
+		expect(provider).toMatchObject({ status: "ready", fetchedAt: NOW_MS });
+		expect(provider.windows.map((window) => ({
+			label: window.label,
+			percentage: window.percentage,
+			resetAt: window.resetAt,
+			limitReached: window.limitReached,
+		}))).toEqual([
+			{ label: "5h", percentage: 0, resetAt: NOW_MS + 60_000, limitReached: undefined },
+			{ label: "week", percentage: 0, resetAt: NOW_MS + 86_400_000, limitReached: undefined },
+			{ label: "month", percentage: 6, resetAt: NOW_MS + 2_592_000_000, limitReached: undefined },
 		]);
-		expect(provider.windows[0]?.period).toEqual({
-			kind: "rolling",
-			durationMs: 5 * 60 * 60 * 1000,
-		});
-		expect(provider.windows[1]?.period).toEqual({
-			kind: "calendar",
-			unit: "week",
-		});
-		expect(provider.windows[2]?.period).toEqual({
-			kind: "calendar",
-			unit: "billing",
-		});
 		expect(providerToView(provider).metrics.map((metric) => metric.label)).toEqual([
-			"5h",
-			"week",
-			"month",
+			"5h", "week", "month",
 		]);
 	});
 
-	test("returns partial data when the API omits a usage window", () => {
+	test("maps the SDK limited flag and keeps existing window periods", () => {
+		const raw: ExperimentalUsageLimitsOutput = {
+			...HOST_USAGE_FIXTURE,
+			data: {
+				...HOST_USAGE_FIXTURE.data!,
+				go: {
+					...HOST_USAGE_FIXTURE.data!.go!,
+					monthly: { percent: 76, limited: true, resetsAt: NOW_MS + 1 },
+				},
+			},
+		};
+		const provider = normalizeOpenCodeGoUsage(raw, NOW_MS);
+		expect(provider.windows[2]?.limitReached).toBe(true);
+		expect(provider.windows[0]?.period).toEqual({ kind: "rolling", durationMs: 5 * 60 * 60 * 1000 });
+		expect(provider.windows[1]?.period).toEqual({ kind: "calendar", unit: "week" });
+		expect(provider.windows[2]?.period).toEqual({ kind: "calendar", unit: "billing" });
+	});
+
+	test("shows usage as unavailable when signed out or Go is not present", () => {
+		expect(normalizeOpenCodeGoUsage({ ...HOST_USAGE_FIXTURE, data: null }, NOW_MS))
+			.toMatchObject({ status: "unsupported", statusText: "OpenCode Go usage unavailable", windows: [] });
+		const withoutGo: ExperimentalUsageLimitsOutput = {
+			...HOST_USAGE_FIXTURE,
+			data: { ...HOST_USAGE_FIXTURE.data!, go: undefined },
+		};
+		expect(normalizeOpenCodeGoUsage(withoutGo, NOW_MS))
+			.toMatchObject({ status: "unsupported", windows: [] });
+	});
+
+	test("keeps valid windows partial and rejects invalid percentages and reset times", () => {
 		const provider = normalizeOpenCodeGoUsage({
-			usage: { rolling: GO_USAGE_FIXTURE.usage.rolling },
+			...HOST_USAGE_FIXTURE,
+			data: {
+				...HOST_USAGE_FIXTURE.data!,
+				go: {
+					rolling: { percent: 40, limited: false, resetsAt: NOW_MS + 10 },
+					weekly: { percent: 101, limited: true, resetsAt: NOW_MS + 20 },
+					monthly: { percent: 50, limited: false, resetsAt: Number.NaN },
+				},
+			},
 		}, NOW_MS);
 
 		expect(provider.status).toBe("partial");
-		expect(provider.statusText).toBe("partial data");
-		expect(provider.windows.map((window) => window.label)).toEqual(["5h"]);
+		expect(provider.windows).toHaveLength(1);
+		expect(provider.windows[0]).toMatchObject({ percentage: 40, resetAt: NOW_MS + 10 });
 	});
 
-	test("fetches usage with the OpenCode Go bearer credential", async () => {
-		const captured = captureRequest(GO_USAGE_FIXTURE);
-		const provider = await fetchUsage();
-
+	test("fetches through the injected host SDK method without Go credentials", async () => {
+		let calls = 0;
+		const provider = await fetchUsage(async () => {
+			calls += 1;
+			return HOST_USAGE_FIXTURE;
+		});
+		expect(calls).toBe(1);
 		expect(provider.status).toBe("ready");
-		expect(captured.url).toBe("https://opencode.ai/zen/go/v1/usage");
-		expect(captured.headers.Authorization).toBe("Bearer go-api-key");
-		expect(captured.headers.Accept).toBe("application/json");
+		expect(opencodeGoProviderDefinition.registration.credentialMode).toBe("none");
 	});
 
-	test.each([401, 403])("maps API status %d to forbidden", async (status) => {
-		mockJsonResponse({}, status);
-		expect(await fetchUsage()).toMatchObject({
-			status: "forbidden",
-			statusText: "forbidden",
+	test("sanitizes host errors and reports cancellation without credential data", async () => {
+		const failed = await fetchUsage(async () => {
+			throw new Error("Authorization: Bearer secret-value");
 		});
-	});
+		expect(failed.status).toBe("error");
+		expect(JSON.stringify(failed)).not.toContain("secret-value");
 
-	test("maps a request timeout without exposing the credential", async () => {
-		globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
-			const { promise, reject } = Promise.withResolvers<Response>();
-			init?.signal?.addEventListener("abort", () => reject(new Error("go-api-key aborted")), {
-				once: true,
-			});
-			return promise;
-		}) as typeof fetch;
-
-		const provider = await fetchUsage(1);
-		expect(provider).toMatchObject({ status: "error", statusText: "timeout" });
-		expect(JSON.stringify(provider)).not.toContain("go-api-key");
-	});
-
-	test("prefers the stored opencode-go credential over the explicit environment fallback", async () => {
-		const reads: string[] = [];
-		const resolver = createCredentialResolver({
-			readOpenCodeEntry: (entry) => {
-				reads.push(`auth:${entry}`);
-				return entry === "opencode-go" ? "stored-go-key" : undefined;
-			},
-			readEnv: (name) => {
-				reads.push(`env:${name}`);
-				return "environment-go-key";
-			},
+		const controller = new AbortController();
+		controller.abort();
+		const parsed = opencodeGoProviderDefinition.registration.parseOptions({});
+		if (!parsed.ok) throw new Error("OpenCode Go options did not parse");
+		const cancelled = await parsed.value.fetchUsage({
+			credential: { secret: "", source: "opencode", variant: "host-usage", epoch: 0 },
+			signal: controller.signal,
+			timeoutMs: 1000,
+			fetchHostUsageLimits: async () => HOST_USAGE_FIXTURE,
 		});
-
-		const resolution = await resolver.resolve(opencodeGoProviderDefinition.registration);
-		expect(resolution).toMatchObject({
-			ok: true,
-			lease: {
-				secret: "stored-go-key",
-				source: "opencode",
-				variant: "opencode-go",
-			},
-		});
-		expect(reads).toEqual(["auth:opencode-go"]);
-	});
-
-	test("uses only OPENCODE_GO_API_KEY as the automatic environment fallback", async () => {
-		const reads: string[] = [];
-		const resolver = createCredentialResolver({
-			readOpenCodeEntry: (entry) => {
-				reads.push(`auth:${entry}`);
-				return undefined;
-			},
-			readEnv: (name) => {
-				reads.push(`env:${name}`);
-				return name === "OPENCODE_GO_API_KEY" ? "environment-go-key" : undefined;
-			},
-		});
-
-		const resolution = await resolver.resolve(opencodeGoProviderDefinition.registration);
-		expect(resolution).toMatchObject({
-			ok: true,
-			lease: {
-				secret: "environment-go-key",
-				source: "env",
-				variant: "opencode-go",
-			},
-		});
-		expect(reads).toEqual(["auth:opencode-go", "env:OPENCODE_GO_API_KEY"]);
+		expect(cancelled).toMatchObject({ status: "error", statusText: "cancelled" });
 	});
 });
 
-async function fetchUsage(timeoutMs = 1000) {
+async function fetchUsage(
+	fetchHostUsageLimits: () => Promise<ExperimentalUsageLimitsOutput>,
+) {
 	const parsed = opencodeGoProviderDefinition.registration.parseOptions({});
-	expect(parsed.ok).toBe(true);
 	if (!parsed.ok) throw new Error("OpenCode Go options did not parse");
 	return parsed.value.fetchUsage({
-		credential: {
-			secret: "go-api-key",
-			source: "opencode",
-			variant: "opencode-go",
-			epoch: 1,
-		},
+		credential: { secret: "", source: "opencode", variant: "host-usage", epoch: 0 },
 		signal: new AbortController().signal,
-		timeoutMs,
+		timeoutMs: 1000,
+		fetchHostUsageLimits,
 	});
 }

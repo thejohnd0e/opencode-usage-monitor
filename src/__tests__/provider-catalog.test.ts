@@ -73,7 +73,7 @@ describe("v2 built-in provider catalog", () => {
 			"https://opencode.ai",
 		]);
 		expect(opencodeGo?.metadata.officialApi.endpoints).toEqual([
-			{ method: "GET", path: "/zen/go/v1/usage" },
+			{ method: "GET", path: "/api/experimental/usage/limits" },
 		]);
 	});
 
@@ -150,10 +150,8 @@ describe("v2 built-in provider catalog", () => {
 			{ source: "opencode", variant: "deepseek", name: "deepseek" },
 			{ source: "env", variant: "deepseek", name: "DEEPSEEK_API_KEY" },
 		]);
-		expect(opencodeGo?.credentialPolicy.defaultCandidates).toEqual([
-			{ source: "opencode", variant: "opencode-go", name: "opencode-go" },
-			{ source: "env", variant: "opencode-go", name: "OPENCODE_GO_API_KEY" },
-		]);
+		expect(opencodeGo?.credentialPolicy.defaultCandidates).toEqual([]);
+		expect(opencodeGo?.credentialMode).toBe("none");
 	});
 
 	test("accepts a fixture definition without a central provider switch", () => {

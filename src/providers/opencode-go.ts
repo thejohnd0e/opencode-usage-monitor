@@ -1,6 +1,7 @@
-import { sanitizeCredentialError } from "../sanitize.js";
+import { sanitizeError } from "../sanitize.js";
 import { getWindowSeverity } from "../severity.js";
 import { providerToView } from "../views/index.js";
+import type { ExperimentalUsageLimitsOutput, UsageLimitsMeter } from "@opencode/client";
 import {
 	defineProvider,
 	type ProviderFetchContext,
@@ -11,8 +12,8 @@ import {
 	asRecord,
 	createStatusProvider,
 	createTimeoutController,
+	normalizeEpochMs,
 	readNumber,
-	readString,
 } from "./shared.js";
 import type {
 	StandardUsageProvider,
@@ -20,7 +21,6 @@ import type {
 	UsagePeriod,
 } from "./types.js";
 
-const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const ROLLING_WINDOW_MS = 5 * 60 * 60 * 1000;
 const statusProvider = createStatusProvider("opencode-go", "OpenCode Go");
 
@@ -36,15 +36,13 @@ export const opencodeGoProviderDefinition = defineProvider<OpenCodeGoOptions>({
 		officialApi: {
 			baseUrls: ["https://opencode.ai"],
 			documentationUrl: "https://opencode.ai/docs/go",
-			endpoints: [{ method: "GET", path: "/zen/go/v1/usage" }],
+			endpoints: [{ method: "GET", path: "/api/experimental/usage/limits" }],
 		},
 	},
+	credentialMode: "none",
 	credentialPolicy: {
-		allowedSources: ["opencode", "env"],
-		defaultCandidates: [
-			{ source: "opencode", variant: "opencode-go", name: "opencode-go" },
-			{ source: "env", variant: "opencode-go", name: "OPENCODE_GO_API_KEY" },
-		],
+		allowedSources: [],
+		defaultCandidates: [],
 	},
 	parseOptions: parseEmptyOptions,
 	fetchUsage: fetchOpenCodeGoUsage,
@@ -56,30 +54,21 @@ async function fetchOpenCodeGoUsage(
 	context: ProviderFetchContext<OpenCodeGoOptions>,
 ): Promise<StandardUsageProvider> {
 	if (context.signal.aborted) return statusProvider("error", "cancelled");
-	if (context.credential.variant !== "opencode-go") {
-		return statusProvider("error", "invalid credential variant");
-	}
+	if (!context.fetchHostUsageLimits)
+		return statusProvider("unsupported", "OpenCode host usage API unavailable");
 
 	const controller = createTimeoutController(context.timeoutMs, context.signal);
 	try {
-		const response = await fetch(OPENCODE_GO_USAGE_URL, {
-			headers: {
-				Authorization: `Bearer ${context.credential.secret}`,
-				Accept: "application/json",
-			},
-			signal: controller.signal,
-		});
-		if (response.status === 401 || response.status === 403) {
-			return statusProvider("forbidden", "forbidden");
-		}
-		if (!response.ok) return statusProvider("error", `api ${response.status}`);
-		return normalizeOpenCodeGoUsage(await response.json());
+		const result = await context.fetchHostUsageLimits(controller.signal);
+		if (context.signal.aborted) return statusProvider("error", "cancelled");
+		if (controller.signal.aborted) return statusProvider("error", "timeout");
+		return normalizeOpenCodeGoUsage(result);
 	} catch (error: unknown) {
 		const message = context.signal.aborted
 			? "cancelled"
 			: controller.signal.aborted
 				? "timeout"
-				: sanitizeCredentialError(error, context.credential.secret);
+				: sanitizeError(error);
 		return statusProvider("error", message);
 	} finally {
 		controller.dispose();
@@ -102,13 +91,17 @@ function invalidOptions<T>(path: string, message: string): ValidationResult<T> {
 }
 
 export function normalizeOpenCodeGoUsage(
-	raw: unknown,
+	raw: ExperimentalUsageLimitsOutput,
 	nowMs: number = Date.now(),
 ): StandardUsageProvider {
-	const root = asRecord(raw) ?? {};
-	const usage = asRecord(root.usage) ?? {};
+	const go = raw.data?.go;
+	if (!go)
+		return {
+			...statusProvider("unsupported", "OpenCode Go usage unavailable"),
+			fetchedAt: nowMs,
+		};
 	const windows = (["rolling", "weekly", "monthly"] as const).flatMap((kind) => {
-		const window = normalizeWindow(kind, usage[kind]);
+		const window = normalizeWindow(kind, go[kind]);
 		return window ? [window] : [];
 	});
 	const ready = windows.length === 3;
@@ -125,15 +118,12 @@ export function normalizeOpenCodeGoUsage(
 
 function normalizeWindow(
 	kind: GoWindowKind,
-	raw: unknown,
+	raw: UsageLimitsMeter,
 ): StandardUsageWindow | undefined {
-	const data = asRecord(raw);
-	if (!data) return undefined;
-	const percentage = readNumber(data.percent);
-	if (percentage === undefined) return undefined;
-
-	const status = readString(data.status);
-	const resetAt = parseResetAt(readString(data.resetsAt));
+	const percentage = readNumber(raw.percent);
+	const resetAt = normalizeEpochMs(raw.resetsAt);
+	if (percentage === undefined || percentage < 0 || percentage > 100 || resetAt === undefined)
+		return undefined;
 	const window = {
 		id: `opencode-go-${kind}`,
 		label: labelForWindow(kind),
@@ -141,10 +131,8 @@ function normalizeWindow(
 		period: periodForWindow(kind),
 		usage: { kind: "percent" as const, usedPercent: percentage },
 		percentage,
-		...(resetAt === undefined ? {} : { resetAt }),
-		...(status === "rate-limited" || percentage >= 100
-			? { limitReached: true }
-			: {}),
+		resetAt,
+		...(raw.limited ? { limitReached: true } : {}),
 	} satisfies StandardUsageWindow;
 	return { ...window, severity: getWindowSeverity(window) };
 }
@@ -162,10 +150,4 @@ function periodForWindow(kind: GoWindowKind): UsagePeriod {
 		kind: "calendar",
 		unit: kind === "weekly" ? "week" : "billing",
 	};
-}
-
-function parseResetAt(value: string | undefined): number | undefined {
-	if (!value) return undefined;
-	const parsed = Date.parse(value);
-	return Number.isFinite(parsed) ? parsed : undefined;
 }

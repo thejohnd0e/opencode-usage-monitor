@@ -35,8 +35,12 @@ import {
 	type V2OpenCodeCredentialReader,
 } from "./auth-v2.js";
 import type { CredentialSourceReaders } from "./credentials.js";
+import type { HostUsageLimitsFetcher } from "./providers/contracts.js";
 import { providerToView } from "./views/index.js";
 import type { ProviderUsageView, TextTheme } from "./views/types.js";
+
+export { createV2OpenCodeCredentialReader } from "./auth-v2.js";
+export { setOpenAIUsageReader } from "./providers/openai.js";
 
 type Child = JSX.Element | string | number | null | undefined | false;
 
@@ -305,12 +309,14 @@ async function readRuntimeConfig(): Promise<RuntimeConfig> {
 function createRuntimeCoordinator(
 	config: ResolvedUsageConfigV2,
 	credentialReaders?: CredentialSourceReaders,
+	fetchHostUsageLimits?: HostUsageLimitsFetcher,
 ): RefreshCoordinator {
 	return createRefreshCoordinator({
 		providers: config.providers,
 		policy: config.refresh,
 		credentialResolver: createCredentialResolver(credentialReaders),
 		cache: createProviderCacheV2(),
+		fetchHostUsageLimits,
 	});
 }
 
@@ -539,6 +545,7 @@ type UsageTuiDependencies = Readonly<{
 	createRuntimeCoordinator: (
 		config: ResolvedUsageConfigV2,
 		readers: CredentialSourceReaders,
+		fetchHostUsageLimits: HostUsageLimitsFetcher,
 	) => RefreshCoordinator;
 	createCredentialReader: (
 		client: V2CredentialClient,
@@ -601,10 +608,16 @@ export function createUsageTuiDefinition(
 				readOpenCodeEntry: credentialReader,
 				readEnv: (name: string) => process.env[name],
 			});
+			const fetchHostUsageLimits: HostUsageLimitsFetcher = (signal) => {
+				if (disposed || signal.aborted)
+					return Promise.reject(new Error("cancelled"));
+				return context.client.experimental.usage.limits(undefined, { signal });
+			};
 			let coordinator = initialRuntime.config
 				? dependencies.createRuntimeCoordinator(
 						initialRuntime.config,
 						credentialReaders,
+						fetchHostUsageLimits,
 					)
 				: undefined;
 
@@ -659,6 +672,7 @@ export function createUsageTuiDefinition(
 					coordinator = dependencies.createRuntimeCoordinator(
 						nextRuntime.config,
 						credentialReaders,
+						fetchHostUsageLimits,
 					);
 					if (disposed || requestGeneration !== reloadGeneration) {
 						coordinator.dispose();
