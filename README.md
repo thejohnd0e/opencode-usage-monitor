@@ -1,7 +1,5 @@
 # opencode-usage-monitor
 
-[Русская версия](./README.ru.md)
-
 > OpenCode TUI sidebar plugin that shows OpenAI, Z.AI / GLM, DeepSeek, and OpenCode Go quota/balance usage without exposing provider credentials in the UI.
 
 [![Package](https://img.shields.io/badge/npm-opencode--usage--monitor-111827?style=for-the-badge&labelColor=111827&color=5b5ef4)](https://www.npmjs.com/package/opencode-usage-monitor)
