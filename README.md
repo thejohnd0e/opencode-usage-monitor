@@ -3,8 +3,6 @@
 > Personal fork of [Mark1708/opencode-usage-monitor](https://github.com/Mark1708/opencode-usage-monitor) `v3.1.0` (MIT).
 > Changes on top of upstream: minute-level reset countdowns that degrade by unit on narrow rows, and an OpenRouter provider. See [Fork changes](#fork-changes).
 
-[Русская версия](./README.ru.md)
-
 > OpenCode TUI sidebar plugin that shows OpenAI, Z.AI / GLM, DeepSeek, and OpenCode Go quota/balance usage without exposing provider credentials in the UI.
 
 [![Package](https://img.shields.io/badge/npm-opencode--usage--monitor-111827?style=for-the-badge&labelColor=111827&color=5b5ef4)](https://www.npmjs.com/package/opencode-usage-monitor)
