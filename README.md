@@ -1,7 +1,7 @@
 # opencode-usage-monitor
 
 > Personal fork of [Mark1708/opencode-usage-monitor](https://github.com/Mark1708/opencode-usage-monitor) `v3.1.0` (MIT).
-> Changes on top of upstream: minute-level reset countdowns that degrade by unit on narrow rows, and an OpenRouter provider. See [Fork changes](#fork-changes).
+> Changes on top of upstream include minute-level countdowns, OpenRouter, and an independent server-owned Codex usage collector. See [Fork changes](#fork-changes).
 
 > OpenCode TUI sidebar plugin that shows OpenAI, Z.AI / GLM, DeepSeek, and OpenCode Go quota/balance usage without exposing provider credentials in the UI.
 
@@ -14,7 +14,7 @@
 |---|---|
 | Status | Actively maintained personal OpenCode tool/plugin |
 | Type | OpenCode TUI plugin / host extension |
-| Host app | OpenCode `>=2.0.32`; release smoke also covers current `2.1.2` |
+| Host app | OpenCode V2 APIs; compile compatibility fixture pinned at `2.0.32` |
 | Package | `opencode-usage-monitor` `3.1.0` |
 | Runtime | Bun `>= 1.3.0` for local development |
 | Maintainer checks | `bun install --frozen-lockfile && bun run typecheck && bun run typecheck:host && bun test && bun run build:all && bun run verify:package` |
@@ -37,7 +37,7 @@ The plugin renders inside the OpenCode terminal UI sidebar.
 - Displays OpenCode Go 5h/week/month usage windows with reset timing.
 - Displays OpenRouter key budget usage (day/week/month) with a reset countdown plus `spent` and `credits` USD rows (fork addition).
 - Standardizes provider output as explicit usage windows plus typed provider-owned details; DeepSeek balance is displayed as a balance detail rather than a reset window.
-- Discovers credentials from OpenCode auth storage and supported environment variables.
+- Uses OpenCode-owned active credentials for providers that need client-side credential projection; Codex statistics resolve on the server through OpenCode's integration API.
 - Redacts secrets from error messages before rendering them in the TUI.
 - Rejects raw provider attribute dumps in runtime snapshots; providers must map safe attributes into ordered details.
 - Uses stale-data indicators and guarded refreshes to avoid overlapping API calls.
@@ -52,7 +52,7 @@ Everything below is added on top of upstream `v3.1.0`; the panel layout, provide
 - **OpenRouter provider.** Reads `GET https://openrouter.ai/api/v1/key` and maps the key's `effective_budget` (`limit_usd`, `spend_usd`, `reset_interval`, `resets_at`) to a `day`/`week`/`month` window with a percentage and countdown, plus `spent` and `credits` (best effort from `GET /api/v1/credits`) USD rows. Request counts are not part of the public payload, so the percentage is budget spend. 401/403 map to `forbidden`.
 - **Tests.** `src/__tests__/openrouter.test.ts` and the countdown cases in `src/__tests__/layout.test.ts`; the provider-catalog order test now includes OpenRouter.
 
-Known local-only difference that is deliberately **not** included here: routing OpenAI usage through a sibling `codex-limits` RPC instead of the HTTP call. It depends on a separate private plugin and is not needed for the changes above.
+OpenAI/Codex usage runs through this package's `usage-monitor.codex` host RPC. The server resolves the OpenAI OAuth credential through OpenCode, fetches the official usage endpoints, and returns a validated secret-free snapshot to the TUI. No sibling `codex-limits` plugin or client-side credential enumeration is required.
 
 Provider setup for the new adapter:
 
@@ -119,9 +119,9 @@ root shims are intentionally absent.
 
 | Component | Supported version | Source |
 |---|---|---|
-| Host app | OpenCode `>=2.0.32` (smoked on `2.0.32` and `2.1.2`) | Release smoke contract |
-| Plugin API | `@opencode/plugin 2.0.32` | `package.json` dependency |
-| Theme API | `@opencode/theme 2.0.32` | `package.json` peer dependency |
+| Host app | OpenCode V2; integration/RPC APIs compile against `2.0.32` | `.test-types/host-api` fixture; packed smoke is mocked, not a live host |
+| Plugin API | `@opencode/plugin 2.2.5` | `package.json` dependency |
+| Theme API | `@opencode/theme 2.2.5` | `package.json` peer dependency |
 | TUI runtime | `@opentui/core >=0.5.17`, `@opentui/solid >=0.5.17`, `solid-js 1.9.12` | `package.json` peer dependencies |
 | Local runtime | Bun `>=1.3.0` | `package.json` engine |
 | TypeScript | `^5.5.0` | `package.json` dev dependency |
@@ -178,7 +178,6 @@ Full documented shape:
   },
   "providers": {
     "openai": {
-      "credential": { "source": "opencode", "entry": "openai" },
       "options": {
         "show_resets": true,
         "show_reset_expiry": false
@@ -198,7 +197,7 @@ Full documented shape:
 }
 ```
 
-The `providers` object controls provider activation. Presence enables a provider; omission disables it and prevents credential, cache, and network work for that provider. Provider-specific refresh policies are intentionally unsupported.
+The `providers` object controls provider activation. Presence enables a provider; omission disables it and prevents credential, cache, and network work for that provider. The OpenAI provider is host-backed: it does not take a `credential` reference and does not use the TUI's persistent provider cache. Provider-specific refresh policies are intentionally unsupported.
 
 Alternatively, add a `usage_monitor` section to `oh-my-openagent.json`. Dedicated `usage-monitor.json` values take precedence.
 
@@ -206,15 +205,25 @@ Alternatively, add a `usage_monitor` section to `oh-my-openagent.json`. Dedicate
 
 ### OpenAI
 
-OpenAI displays ChatGPT/Codex subscription quota windows from the active
-OpenCode OAuth credential, not from OpenAI Platform API keys. The plugin calls
-the v2 credential client and retains only the normalized access token, expiry,
-and `metadata.accountID`/`metadata.accountId` projection needed by the provider.
+OpenAI displays ChatGPT/Codex subscription quota windows from an OpenCode OAuth
+credential, not from OpenAI Platform API keys. A server-side collector uses
+`integration.connection.active("openai")` by default, then resolves that
+connection through OpenCode. OAuth refresh is performed by OpenCode itself.
 
-The plugin never reads `auth.json`, never falls back to inactive credentials,
-and never retains refresh tokens, labels, arbitrary metadata, or raw host
-credential records. `OPENAI_API_KEY` and `OPENAI_ADMIN_KEY` are not used for
-subscription quota.
+For a separate statistics-only OpenAI connection, pass the server plugin option
+`usageCredentialID` with that existing OpenAI credential's ID. The collector
+verifies that the ID belongs to the OpenAI integration, then resolves it
+without activating it or changing the model connection. If the selected ID is
+missing or cannot be resolved, usage reports an authorization error; it never
+falls back to another OpenAI credential. Do not put this ID under
+`providers.openai.credential` or commit a machine-specific ID to shared config.
+
+The server never reads `auth.json`, never activates or switches a connection,
+and only passes the transient access token/account ID to its fetcher. Refresh
+tokens, labels, arbitrary metadata, and raw credential records are not
+returned to the TUI or persisted. `OPENAI_API_KEY` and `OPENAI_ADMIN_KEY` are
+not used for subscription quota. The TUI does not call `credential.list` for
+OpenAI and never makes a direct ChatGPT usage request.
 
 Available Codex reset credits are shown by default from the primary usage
 response. Set `providers.openai.options.show_resets` to `false` to hide them.
@@ -222,6 +231,20 @@ Set `show_reset_expiry` to `true` to make a conditional supplemental request
 and show the nearest available credit expiry. The supplemental request runs
 only when resets are visible and at least one credit is available; a failure
 omits the expiry without hiding the usage windows or reset count.
+
+### Moving from a `codex-limits` wrapper
+
+The package now owns the Codex RPC and fetch path. A migration can therefore
+remove the TUI's runtime dependency on `codex-limits`; it does **not** require
+uninstalling or deleting that plugin. Before changing a live setup, make a
+backup of the exact plugin wrapper and configuration files, move any
+statistics-only credential ID into the `usageCredentialID` server plugin
+option, and keep `providers.openai.options.show_reset_expiry` enabled if the
+expiry row is desired. Build and verify the packed artifact first, then reload
+the configuration and confirm the displayed usage while checking that the
+model account remains unchanged. This repository's package checks use a
+disposable mocked host/upstream fixture; they are not a live-host or live
+credential migration test. No local installation is changed by these steps.
 
 ### Z.AI and GLM
 
@@ -328,7 +351,7 @@ The API reports budget spend, not request counts, so no requests-per-day percent
 
 ## Troubleshooting
 
-- If OpenAI shows `auth missing`, `oauth missing`, `oauth expired`, or `account id missing`, run `opencode providers login` for OpenAI and verify the OpenCode auth entry contains non-expired OAuth `openai.access`, `openai.accountId`, `openai.expires`, and `openai.type: "oauth"`.
+- If OpenAI shows `missing-auth`, reauthorize the selected OpenAI connection in OpenCode. For an explicit `usageCredentialID`, confirm it still exists under the OpenAI integration; the collector intentionally does not fall back to another account.
 - If Z.AI shows `auth missing`, configure a supported Z.AI or Zhipu environment variable or OpenCode auth entry.
 - If Z.AI shows `partial` on an enterprise/org account, set `providers.zai.options.organization_id` and `providers.zai.options.project_id` (or `ZHIPU_ORGANIZATION_ID` / `ZHIPU_PROJECT_ID`) so the `?type=2` endpoint is used.
 - If DeepSeek shows `auth missing`, set `DEEPSEEK_API_KEY` or activate a DeepSeek credential in OpenCode.
@@ -341,9 +364,9 @@ The API reports budget spend, not request counts, so no requests-per-day percent
 
 ## Limitations / Security
 
-- The plugin reads local OpenCode auth metadata and supported environment variables, but examples in this README use placeholders only.
+- The server resolves only the selected/active OpenAI connection through OpenCode; the TUI credential-list permission is not required for Codex usage.
 - Secrets are redacted from rendered error messages before they reach the TUI.
-- Provider data depends on external OpenAI, Z.AI, Zhipu, DeepSeek, and OpenCode Go API availability and credential permissions.
+- Provider data depends on external OpenAI, Z.AI, Zhipu, DeepSeek, and OpenCode Go API availability and credential permissions. The package smoke uses mocked host/upstream behavior and does not replace a live deployment test.
 - The package is a host extension; runtime behavior depends on compatible OpenCode and OpenTUI APIs.
 
 ## Status

@@ -166,6 +166,12 @@ void [serverId, tuiId, serverSetup, tuiSetup];
     cwd: consumerDir,
     stdio: "inherit",
   });
+  if (packageJson.name === "opencode-usage-monitor") {
+    execFileSync("bun", [join(projectRoot, "scripts", "smoke-independent-codex.mjs"), consumerDir], {
+      cwd: projectRoot,
+      stdio: "inherit",
+    });
+  }
 } finally {
   rmSync(consumerDir, { recursive: true, force: true });
 }

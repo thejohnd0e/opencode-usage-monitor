@@ -121,11 +121,11 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 
 **Interfaces:** `bun scripts/smoke-independent-codex.mjs <consumer-directory>` exercises the installed packed package in a disposable isolated host context, with mocked upstream/credential resolution and no codex-limits package. It exits nonzero on contract failures; it never accesses live credentials/config.
 
-- [ ] Extend clean-consumer checks to fail on codex-limits imports/package presence, old global reader export, missing server RPC registration, and TUI requesting a different RPC contract. Test the fixture with no credential.list permission for OpenAI and an expiring OAuth credential refreshed by the host stub.
-- [ ] Run the new check before fixture support; confirm failure proves absent server/TUI integration rather than a generic missing executable.
-- [ ] Implement the isolated host fixture using installed exports and the real RPC serialization/schema path supported by the SDK. Verify 5h/week/reset details, refresh, account switch, cleanup and unchanged model connection. If a full private host cannot be launched in the environment, distinguish mocked package integration from real host smoke and report the missing gate; do not label mocks a live test.
-- [ ] Document server `usageCredentialID`, active default/no-fallback behavior, detail options, supported SDK evidence, failure states, and removal of the foreign dependency. Include backup-first local migration procedure, not an automatic installation edit.
-- [ ] Run sequentially: `bun run typecheck`, `bun run typecheck:host`, `bun test`, `bun run build:all`, `bun run verify:package`. Require zero exit statuses and successful independent packed-consumer checks. Inspect `git diff --check` and full diff for secrets/unrelated changes.
+- [x] Extend clean-consumer checks to fail on codex-limits imports/package presence, old global reader export, missing server RPC registration, and TUI requesting a different RPC contract. The fixture has no `credential.list` permission for OpenAI and an expired OAuth credential refreshed by the host stub.
+- [x] Run the new check before fixture support; confirmed it fails at the first required Codex RPC read (not on missing executables/imports).
+- [x] Implement the isolated host fixture using installed exports and RPC serialization/schema. Verified 5h/week/reset details, host refresh, account switch, cleanup and unchanged model connection. This is a mocked packed-package integration smoke, not a live-host test.
+- [x] Document server `usageCredentialID`, active default/no-fallback behavior, detail options, SDK compatibility evidence, failure states, removal of the runtime foreign dependency, and backup-first local migration. No live installation edit was made.
+- [x] Run typechecks, targeted tests, build, package verification, and diff checks. Full suite result remains 307 pass / 15 known Windows/Bun persistent-cache failures (`O_NOFOLLOW`); this unchanged baseline is documented. Packed package verifier and independent Codex smoke both exit successfully.
 - [ ] Commit targeted files: `git commit -m "test: verify packed Codex monitoring without external plugins"`.
 
 ## Deferred Local Installation Migration (requires authorization)

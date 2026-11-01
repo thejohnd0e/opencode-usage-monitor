@@ -4,7 +4,7 @@
 
 ## OVERVIEW
 
-OpenCode V2-only sidebar plugin for OpenAI, Z.AI/GLM, DeepSeek, and OpenCode Go quota visibility. Runtime credentials come from the active OpenCode credential record; raw credentials and provider payloads never enter render state or persistent cache.
+OpenCode V2-only sidebar plugin for OpenAI, Z.AI/GLM, DeepSeek, and OpenCode Go quota visibility. TUI credentials are active-only projections; Codex OAuth is resolved transiently by the server. Raw credentials and provider payloads never enter render state or persistent cache.
 
 ## STRUCTURE
 
@@ -20,6 +20,7 @@ src/
 ├── providers/             # Provider adapters
 └── views/                 # Provider-specific render models
 scripts/verify-package.mjs # Packed-artifact and clean-consumer gate
+scripts/smoke-independent-codex.mjs # Isolated packed-package RPC smoke (mock host/upstream)
 .github/workflows/
 ├── ci.yml                  # Required PR/push checks and package artifact
 └── release.yml             # Tag validation, npm OIDC publish, GitHub Release
@@ -33,7 +34,7 @@ scripts/verify-package.mjs # Packed-artifact and clean-consumer gate
 - `@opentui/solid` is imported only by the TUI entry/render boundary.
 - A slot callback creates one stable container; reactive content is mounted with `insert(container, () => ...)`.
 - Config accepts only `version: 2`. Invalid config starts no provider work.
-- Provider credentials are active-only, normalized projections in the TUI credential path. Exception: the OpenAI server collector may resolve an explicitly configured statistics-only OpenAI connection through `integration.connection.resolve`, without activating it or switching the model connection. This exception returns only transient access token, account ID, and expiry to the collector; refresh tokens, arbitrary metadata, labels, and raw host records are forbidden.
+- Provider credentials are active-only, normalized projections in the TUI credential path. Exception: the OpenAI server collector may resolve either the active OpenAI connection or an explicitly configured statistics-only OpenAI connection through `integration.connection.resolve`, without activating it or switching the model connection. The resolver returns only transient access token, account ID, and expiry to the collector; refresh tokens, arbitrary metadata, labels, and raw host records are forbidden. The TUI does not enumerate OpenAI credentials.
 - Canonical snapshots are validated before render/cache publication. Cache identity is provider- and account-scoped.
 - Setup owns every disposable resource. Cleanup invalidates pending async work before closing resources.
 

@@ -309,6 +309,7 @@ function createRuntimeCoordinator(
 	config: ResolvedUsageConfigV2,
 	credentialReaders?: CredentialSourceReaders,
 	fetchHostUsageLimits?: HostUsageLimitsFetcher,
+	fetchCodexUsage?: CodexUsageFetcher,
 ): RefreshCoordinator {
 	return createRefreshCoordinator({
 		providers: config.providers,
@@ -316,6 +317,7 @@ function createRuntimeCoordinator(
 		credentialResolver: createCredentialResolver(credentialReaders),
 		cache: createProviderCacheV2(),
 		fetchHostUsageLimits,
+		fetchCodexUsage,
 	});
 }
 
