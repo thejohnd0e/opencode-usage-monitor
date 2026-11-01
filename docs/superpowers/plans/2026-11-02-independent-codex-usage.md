@@ -126,7 +126,7 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 - [x] Implement the isolated host fixture using installed exports and RPC serialization/schema. Verified 5h/week/reset details, host refresh, account switch, cleanup and unchanged model connection. This is a mocked packed-package integration smoke, not a live-host test.
 - [x] Document server `usageCredentialID`, active default/no-fallback behavior, detail options, SDK compatibility evidence, failure states, removal of the runtime foreign dependency, and backup-first local migration. No live installation edit was made.
 - [x] Run typechecks, targeted tests, build, package verification, and diff checks. Full suite result remains 307 pass / 15 known Windows/Bun persistent-cache failures (`O_NOFOLLOW`); this unchanged baseline is documented. Packed package verifier and independent Codex smoke both exit successfully.
-- [ ] Commit targeted files: `git commit -m "test: verify packed Codex monitoring without external plugins"`.
+- [x] Commit targeted files: `git commit -m "test: verify packed Codex monitoring without external plugins"` (`a898953`).
 
 ## Deferred Local Installation Migration (requires authorization)
 
