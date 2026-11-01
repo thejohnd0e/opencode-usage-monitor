@@ -99,7 +99,7 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 - [x] Implement server-owned shared requests with waiter-specific cancellation, account+options cache keys, invalidation generations, and pre-publication identity rechecks. Invalidation clears last-good cache and aborts superseded work. Never serve an old-scope result after resolution, even to a waiter already attached to an old request.
 - [x] Register RPC in server setup; subscribe to credential.updated/switched using an owned abort controller; emit non-secret invalidated events with revision. Avoid emitting events from read itself. Retry after invalidation is bounded to one additional resolution; cleanup invalidates before abort/disposal.
 - [x] Run focused tests and both typecheck gates; RPC schema plus canonical validator reject malformed and secret-bearing output.
-- [ ] Commit targeted files: `git commit -m "feat: expose independent account-safe Codex usage RPC"`.
+- [x] Commit targeted files: `git commit -m "feat: expose independent account-safe Codex usage RPC"` (36ac9dc).
 
 ### Task 4: Route OpenAI through host RPC and isolate TUI state
 
