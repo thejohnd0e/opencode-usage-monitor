@@ -1,6 +1,7 @@
 import { sanitizeError } from "../sanitize.js";
 import type { ProviderUsageView } from "../views/types.js";
 import type { ExperimentalUsageLimitsOutput } from "@opencode/client";
+import type { CodexUsageFetcher } from "../codex-contract.js";
 import type {
 	ProviderContext,
 	ProviderVisibilityConfigKey,
@@ -64,6 +65,7 @@ export type ProviderFetchExecutionContext = Readonly<{
 	fetchHostUsageLimits?: (
 		signal: AbortSignal,
 	) => Promise<ExperimentalUsageLimitsOutput>;
+	fetchCodexUsage?: CodexUsageFetcher;
 }>;
 
 export type HostUsageLimitsFetcher = (

@@ -18,7 +18,6 @@ import {
 	deepseekFixture,
 	makeCtx,
 	mockJsonResponse,
-	openAiFixture,
 	restoreFetch,
 	zaiFixture,
 } from "./_helpers.js";
@@ -28,9 +27,12 @@ afterEach(() => {
 });
 
 describe("native OpenAI subscription provider definition", () => {
-	test("binds empty options and fetches WHAM usage with OAuth account headers", async () => {
+	test("uses no credential mode and consumes only the injected host RPC", async () => {
 		const binding = parseBinding(openaiProviderDefinition.registration, {});
-		const captured = captureRequest(openAiFixture());
+		let rpcCalls = 0;
+		globalThis.fetch = (() => {
+			throw new Error("OpenAI must not call its own endpoint from the TUI");
+		}) as unknown as typeof fetch;
 
 		const provider = await binding.fetchUsage({
 			credential: {
@@ -46,13 +48,31 @@ describe("native OpenAI subscription provider definition", () => {
 			},
 			signal: new AbortController().signal,
 			timeoutMs: 1000,
+			fetchCodexUsage: async () => {
+				rpcCalls += 1;
+				return {
+					status: "ok",
+					revision: "server:1",
+					snapshot: {
+						id: "openai",
+						displayName: "openai",
+						status: "ready",
+						windows: [],
+						fetchedAt: Date.now(),
+					},
+				};
+			},
 		});
 
-		expect(captured.url).toBe("https://chatgpt.com/backend-api/wham/usage");
-		expect(captured.headers.Authorization).toBe("Bearer oauth-token");
-		expect(captured.headers["ChatGPT-Account-Id"]).toBe("account-1");
-		expect(captured.headers.Origin).toBe("https://chatgpt.com");
+		expect(openaiProviderDefinition.registration.credentialMode).toBe("none");
+		expect(openaiProviderDefinition.registration.credentialPolicy.defaultCandidates).toEqual([]);
+		expect(rpcCalls).toBe(1);
 		expect(provider.status).toBe("ready");
+		expect((await binding.fetchUsage({
+			credential: { secret: "", source: "opencode", variant: "host-usage", epoch: 0 },
+			signal: new AbortController().signal,
+			timeoutMs: 1000,
+		})).status).toBe("unsupported");
 		expect(
 			binding.resolveCacheScopeMetadata({
 				readAccountIdentifier: () => "account-1",
@@ -60,84 +80,22 @@ describe("native OpenAI subscription provider definition", () => {
 		).toBeNull();
 	});
 
-	test("requires an OpenAI credential variant and complete OAuth metadata before fetch", async () => {
+	test("returns unsupported without an injected host RPC and never invokes fetch", async () => {
 		const binding = parseBinding(openaiProviderDefinition.registration, {});
-		const captured = captureRequest(openAiFixture());
-
-		const invalidVariant = await binding.fetchUsage({
-			credential: {
-				secret: "oauth-token",
-				source: "opencode",
-				variant: "zai",
-				epoch: 1,
-				metadata: { accountId: "account-1" },
-			},
-			signal: new AbortController().signal,
-			timeoutMs: 1000,
-		});
-		const missingOAuth = await binding.fetchUsage({
-			credential: {
-				secret: "oauth-token",
-				source: "opencode",
-				variant: "openai",
-				epoch: 1,
-			},
-			signal: new AbortController().signal,
-			timeoutMs: 1000,
-		});
-		const missingAccount = await binding.fetchUsage({
-			credential: {
-				secret: "oauth-token",
-				source: "opencode",
-				variant: "openai",
-				epoch: 1,
-				metadata: {
-					type: "oauth",
-					expires: String(Date.now() + 60_000),
-				},
-			},
-			signal: new AbortController().signal,
-			timeoutMs: 1000,
-		});
-		const expiredOAuth = await binding.fetchUsage({
-			credential: {
-				secret: "oauth-token",
-				source: "opencode",
-				variant: "openai",
-				epoch: 1,
-				metadata: {
-					accountId: "account-1",
-					type: "oauth",
-					expires: String(Date.now() - 1),
-				},
-			},
+		globalThis.fetch = (() => { throw new Error("must not call fetch directly"); }) as unknown as typeof fetch;
+		const unsupported = await binding.fetchUsage({
+			credential: { secret: "", source: "opencode", variant: "host-usage", epoch: 0 },
 			signal: new AbortController().signal,
 			timeoutMs: 1000,
 		});
 
-		expect(invalidVariant).toMatchObject({
-			status: "error",
-			statusText: "invalid credential variant",
-		});
-		expect(missingOAuth).toMatchObject({
-			status: "missing-auth",
-			statusText: "oauth missing",
-		});
-		expect(missingAccount).toMatchObject({
-			status: "missing-auth",
-			statusText: "account id missing",
-		});
-		expect(expiredOAuth).toMatchObject({
-			status: "missing-auth",
-			statusText: "oauth expired",
-		});
-		expect(captured.url).toBe("");
+		expect(unsupported).toMatchObject({ status: "unsupported" });
 	});
 
-	test("legacy bridge uses OpenCode OAuth and ignores OpenAI API key env fallback", async () => {
-		const captured = captureRequest(openAiFixture());
+	test("legacy bridge never makes a direct request or uses API key fallback", async () => {
+		globalThis.fetch = (() => { throw new Error("must not call fetch directly"); }) as unknown as typeof fetch;
 
-		await openAIUsageAdapter.fetchUsage(
+		const provider = await openAIUsageAdapter.fetchUsage(
 			makeCtx(
 				{
 				openai: {
@@ -152,8 +110,7 @@ describe("native OpenAI subscription provider definition", () => {
 			new AbortController().signal,
 		);
 
-		expect(captured.headers.Authorization).toBe("Bearer oauth-token");
-		expect(captured.headers["ChatGPT-Account-Id"]).toBe("account-1");
+		expect(provider.status).toBe("unsupported");
 	});
 });
 

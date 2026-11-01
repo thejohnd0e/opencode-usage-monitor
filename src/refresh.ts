@@ -434,6 +434,7 @@ class DeterministicRefreshCoordinator implements RefreshCoordinator {
 				signal: controller.signal,
 				timeoutMs: this.policy.timeout_ms,
 				fetchHostUsageLimits: this.input.fetchHostUsageLimits,
+				fetchCodexUsage: this.input.fetchCodexUsage,
 			});
 			this.commitFetchResult(result, accountScope, scope, gate, lease.secret);
 		} catch (error: unknown) {

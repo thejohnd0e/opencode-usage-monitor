@@ -1,6 +1,7 @@
 import { watch } from "node:fs";
 import { Plugin } from "@opencode/plugin/tui";
 import type { JSX } from "@opentui/solid";
+import { CodexUsage, decodeCodexReply, type CodexUsageFetcher } from "./codex-contract.js";
 import { createElement, insert, setProp } from "@opentui/solid";
 import { createSignal } from "solid-js";
 
@@ -40,8 +41,6 @@ import { providerToView } from "./views/index.js";
 import type { ProviderUsageView, TextTheme } from "./views/types.js";
 
 export { createV2OpenCodeCredentialReader } from "./auth-v2.js";
-export { setOpenAIUsageReader } from "./providers/openai.js";
-
 type Child = JSX.Element | string | number | null | undefined | false;
 
 type RuntimeConfig = Readonly<{
@@ -546,6 +545,7 @@ type UsageTuiDependencies = Readonly<{
 		config: ResolvedUsageConfigV2,
 		readers: CredentialSourceReaders,
 		fetchHostUsageLimits: HostUsageLimitsFetcher,
+		fetchCodexUsage?: CodexUsageFetcher,
 	) => RefreshCoordinator;
 	createCredentialReader: (
 		client: V2CredentialClient,
@@ -613,13 +613,57 @@ export function createUsageTuiDefinition(
 					return Promise.reject(new Error("cancelled"));
 				return context.client.experimental.usage.limits(undefined, { signal });
 			};
-			let coordinator = initialRuntime.config
+			const codexRpc = context.client.rpc(CodexUsage);
+			const fetchCodexUsage: CodexUsageFetcher = async (input, signal) => {
+				if (disposed || signal.aborted) {
+					return { status: "error", revision: "client-cancelled", message: "cancelled" };
+				}
+				const reply = decodeCodexReply(await codexRpc.read(input, { signal }));
+				return reply ?? {
+					status: "error",
+					revision: "invalid-rpc-reply",
+					message: "Codex host RPC returned an invalid response",
+				};
+			};
+			let coordinator: RefreshCoordinator | undefined;
+			let configuredOpenAI = Boolean(initialRuntime.config?.providers.some((provider) => provider.id === "openai"));
+			const codexEvents = new AbortController();
+			const seenInvalidations = new Set<string>();
+			let latestInvalidation: { instance: string; sequence: number } | undefined;
+			const unsubscribeCodex = codexRpc.events.on("invalidated", (event) => {
+				const revision = event.data.revision;
+				if (typeof revision !== "string" || disposed || seenInvalidations.has(revision)) return;
+				const separator = revision.lastIndexOf(":");
+				const sequence = Number(revision.slice(separator + 1));
+				const instance = separator > 0 ? revision.slice(0, separator) : "";
+				if (
+					instance &&
+					Number.isSafeInteger(sequence) &&
+					latestInvalidation?.instance === instance &&
+					sequence <= latestInvalidation.sequence
+				) return;
+				if (instance && Number.isSafeInteger(sequence)) latestInvalidation = { instance, sequence };
+				seenInvalidations.add(revision);
+				if (seenInvalidations.size > 128) {
+					const oldest = seenInvalidations.values().next().value;
+					if (oldest) seenInvalidations.delete(oldest);
+				}
+				if (!coordinator || !configHasOpenAI()) return;
+				coordinator.invalidateCredentials();
+				void coordinator.refreshAll();
+			}, { signal: codexEvents.signal });
+			coordinator = initialRuntime.config
 				? dependencies.createRuntimeCoordinator(
 						initialRuntime.config,
 						credentialReaders,
 						fetchHostUsageLimits,
+						fetchCodexUsage,
 					)
 				: undefined;
+
+			function configHasOpenAI(): boolean {
+				return configuredOpenAI;
+			}
 
 			const setProvidersWithInitialCollapse = (
 				providers: Record<ProviderId, StandardUsageProvider>,
@@ -653,6 +697,7 @@ export function createUsageTuiDefinition(
 				if (disposed || requestGeneration !== reloadGeneration) return;
 				if (nextRuntime.fingerprint === fingerprint) return;
 				fingerprint = nextRuntime.fingerprint;
+				configuredOpenAI = Boolean(nextRuntime.config?.providers.some((provider) => provider.id === "openai"));
 				setConfig(nextRuntime.render);
 				if (!nextRuntime.config) {
 					unsubscribe();
@@ -673,6 +718,7 @@ export function createUsageTuiDefinition(
 						nextRuntime.config,
 						credentialReaders,
 						fetchHostUsageLimits,
+						fetchCodexUsage,
 					);
 					if (disposed || requestGeneration !== reloadGeneration) {
 						coordinator.dispose();
@@ -788,6 +834,8 @@ export function createUsageTuiDefinition(
 				unregisterSlot();
 				unsubscribeCredentialUpdated();
 				unsubscribeCredentialSwitched();
+				unsubscribeCodex();
+				codexEvents.abort();
 				configWatcher?.close();
 				unsubscribe();
 				coordinator?.dispose();

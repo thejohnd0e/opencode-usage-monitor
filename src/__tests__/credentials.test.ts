@@ -148,7 +148,7 @@ describe("v2 credential resolution", () => {
 		expect(JSON.stringify(result)).not.toContain(SECRET_B);
 	});
 
-	test("keeps top-level OpenCode OAuth metadata ahead of untrusted nested metadata", async () => {
+	test("does not resolve OpenAI through the TUI credential resolver", async () => {
 		const resolver = createCredentialResolver({
 			readOpenCodeEntry: () => ({
 				secret: SECRET_A,
@@ -164,15 +164,7 @@ describe("v2 credential resolution", () => {
 
 		const result = await resolver.resolve(builtinRegistration("openai"));
 
-		expect(result).toMatchObject({
-			ok: true,
-			lease: {
-				metadata: {
-					accountId: "account-123",
-					type: "oauth",
-				},
-			},
-		});
+		expect(result).toMatchObject({ ok: false, kind: "missing" });
 	});
 
 	test("treats a refresh-only OpenCode entry as missing instead of resolving a usable secret", async () => {

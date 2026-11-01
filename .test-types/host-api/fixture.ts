@@ -18,7 +18,16 @@ export const server = ServerPlugin.define({
       id: "fixture.codex-usage",
       methods: {
         read: {
-          input: { type: "object", properties: {}, additionalProperties: false },
+          input: {
+            type: "object",
+            properties: {
+              show_resets: { type: "boolean" },
+              show_reset_expiry: { type: "boolean" },
+              timeout_ms: { type: "integer", minimum: 1000, maximum: 30000 },
+            },
+            required: ["show_resets", "show_reset_expiry", "timeout_ms"],
+            additionalProperties: false,
+          },
           output: { type: "object", properties: { status: { type: "string" } }, required: ["status"], additionalProperties: false },
         },
       },
@@ -43,6 +52,23 @@ export const server = ServerPlugin.define({
 export const tui = TuiPlugin.define({
   id: "fixture.tui",
   setup(context) {
+    const codexUsage = Rpc.define({
+      id: "fixture.codex-usage",
+      methods: {
+        read: {
+          input: { type: "object", properties: { value: { type: "string" } }, required: ["value"], additionalProperties: false },
+          output: { type: "object", properties: { status: { type: "string" } }, required: ["status"], additionalProperties: false },
+        },
+      },
+      events: {
+        invalidated: { schema: { type: "object", properties: { revision: { type: "string" } }, required: ["revision"], additionalProperties: false } },
+      },
+    });
+    const codexClient = context.client.rpc(codexUsage);
+    const removeInvalidation = codexClient.events.on("invalidated", (event) => {
+      void event.data.revision;
+    });
+    void codexClient.read({ value: "fixture" }, { signal: new AbortController().signal });
     const removeUpdated = context.data.on("credential.updated", () => undefined);
     const removeSwitched = context.data.on("credential.switched", (event) => {
       void event.data.integrationID;
@@ -80,7 +106,8 @@ export const tui = TuiPlugin.define({
     }));
 
     return () => {
-      removeSlot();
+        removeSlot();
+        removeInvalidation();
       removeUpdated();
       removeSwitched();
     };

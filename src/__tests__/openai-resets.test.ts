@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { CONFIG_DEFAULTS } from "../config.js";
+import { fetchCodexSnapshot } from "../codex-fetch.js";
 import {
 	normalizeWhamUsage,
 	openaiProviderDefinition,
@@ -187,20 +188,15 @@ async function fetchUsage(
 	options: OpenAIOptions,
 	signal: AbortSignal = new AbortController().signal,
 ) {
-	return openaiProviderDefinition.fetchUsage({
-		credential: {
-			secret: "oauth-access",
-			source: "opencode",
-			variant: "openai",
-			epoch: 1,
-			metadata: {
-				accountId: "account-123",
-				type: "oauth",
-				expires: String(Date.now() + 60_000),
-			},
-		},
-		options,
-		signal,
-		timeoutMs: 1000,
-	});
+	return fetchCodexSnapshot({
+		connectionID: "credential-openai",
+		accountID: "account-123",
+		access: "oauth-access",
+		expires: Date.now() + 60_000,
+	}, {
+		show_resets: options.show_resets,
+		show_reset_expiry: options.show_reset_expiry,
+	},
+	signal,
+	);
 }

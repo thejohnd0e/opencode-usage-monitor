@@ -5,6 +5,7 @@ import type {
 import type { CredentialResolution } from "./credentials.js";
 import type { ProviderRegistration } from "./providers/contracts.js";
 import type { ExperimentalUsageLimitsOutput } from "@opencode/client";
+import type { CodexUsageFetcher } from "./codex-contract.js";
 import type {
 	MonotonicClock,
 	OneShotTimers,
@@ -33,6 +34,7 @@ export type RefreshCoordinatorInput = Readonly<{
 	fetchHostUsageLimits?: (
 		signal: AbortSignal,
 	) => Promise<ExperimentalUsageLimitsOutput>;
+	fetchCodexUsage?: CodexUsageFetcher;
 	clock?: MonotonicClock;
 	timers?: OneShotTimers;
 }>;

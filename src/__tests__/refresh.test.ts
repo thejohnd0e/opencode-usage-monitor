@@ -390,6 +390,47 @@ describe("deterministic provider refresh coordinator", () => {
 		coordinator.dispose();
 	});
 
+	test("OpenAI host RPC runs without credential resolution or persistent cache", async () => {
+		let rpcCalls = 0;
+		const selected = provider(
+			"openai",
+			async (context) => {
+				const reply = await context.fetchCodexUsage?.({
+					show_resets: true,
+					show_reset_expiry: false,
+					timeout_ms: 1_000,
+				}, context.signal);
+				return reply?.status === "ok" ? reply.snapshot : snapshot("openai", 1_000, "partial");
+			},
+			{ credentialMode: "none" },
+		);
+		const cache = new TestCache();
+		const resolver = credentials({
+			ok: false,
+			kind: "source",
+			message: "credential resolver must not run",
+			epoch: 0,
+		});
+		const coordinator = createRefreshCoordinator({
+			providers: [selected],
+			policy: POLICY_MANUAL,
+			credentialResolver: resolver,
+			cache,
+			fetchCodexUsage: async () => {
+				rpcCalls += 1;
+				return { status: "ok", revision: "server:1", snapshot: snapshot("openai") };
+			},
+		});
+
+		await coordinator.refreshProvider("openai");
+		expect(resolver.calls).toEqual([]);
+		expect(rpcCalls).toBe(1);
+		expect(cache.reads).toEqual([]);
+		expect(cache.writes).toEqual([]);
+		expect(state(coordinator.getStates(), "openai").status).toBe("ready");
+		coordinator.dispose();
+	});
+
 	test("manual bootstrap reads cache but performs zero startup fetches and isolates config errors", async () => {
 		let fetches = 0;
 		const valid = provider(

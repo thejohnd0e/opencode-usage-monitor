@@ -300,11 +300,11 @@ describe("v2 config parser", () => {
 		);
 	});
 
-	test("accepts OpenAI subscription provider with explicit OpenCode credential reference", () => {
+	test("accepts OpenAI host-backed provider without a client credential reference", async () => {
 		const result = parseUsageConfigV2({
 			version: 2,
 			providers: {
-				openai: { credential: { source: "opencode", entry: "openai" } },
+				openai: { options: { show_resets: true, show_reset_expiry: true } },
 			},
 		});
 
@@ -313,10 +313,20 @@ describe("v2 config parser", () => {
 		expect(result.value.providers.map((provider) => provider.id)).toEqual([
 			"openai",
 		]);
-		expect(result.value.providers[0]?.credential).toEqual({
-			source: "opencode",
-			entry: "openai",
+		const provider = result.value.providers[0];
+		expect(provider?.credential).toBeUndefined();
+		if (!provider?.ok) return;
+		let requested: unknown;
+		await provider.binding.fetchUsage({
+			credential: { secret: "", source: "opencode", variant: "host-usage", epoch: 0 },
+			signal: new AbortController().signal,
+			timeoutMs: 1_000,
+			fetchCodexUsage: async (input) => {
+				requested = input;
+				return { status: "unsupported", revision: "test", message: "not called" };
+			},
 		});
+		expect(requested).toMatchObject({ show_resets: true, show_reset_expiry: true });
 	});
 });
 

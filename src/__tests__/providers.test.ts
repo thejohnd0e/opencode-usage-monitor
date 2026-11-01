@@ -6,7 +6,7 @@ import {
 	deepseekUsageAdapter,
 	normalizeDeepseekBalance,
 } from "../providers/deepseek.js";
-import { normalizeWhamUsage, openAIUsageAdapter, openaiProviderDefinition, setOpenAIUsageReader } from "../providers/openai.js";
+import { normalizeWhamUsage, openAIUsageAdapter, openaiProviderDefinition } from "../providers/openai.js";
 import { normalizeZaiQuota, zaiUsageAdapter } from "../providers/zai.js";
 import { validateAndCloneUsageSnapshot } from "../snapshot-validation.js";
 import { providerToView } from "../views/index.js";
@@ -14,9 +14,7 @@ import {
 	captureRequest,
 	deepseekFixture,
 	makeCtx,
-	mockJsonResponse,
 	nowMs,
-	openAiFixture,
 	renderedMetrics,
 	restoreFetch,
 	withoutUsageEnv,
@@ -25,11 +23,10 @@ import {
 
 afterEach(() => {
 	restoreFetch();
-	setOpenAIUsageReader(undefined);
 });
 
 describe("provider normalization", () => {
-	test("uses the explicit Codex usage reader instead of making duplicate OpenAI requests", async () => {
+	test("uses only an injected Codex RPC instead of making direct OpenAI requests", async () => {
 		const codexSnapshot = {
 			id: "openai",
 			displayName: "openai",
@@ -38,71 +35,36 @@ describe("provider normalization", () => {
 			fetchedAt: 1_700_000_000_000,
 		};
 		let reads = 0;
-		setOpenAIUsageReader(async () => {
+		const result = await openaiProviderDefinition.fetchUsage({
+			credential: { secret: "", source: "opencode", variant: "host-usage", epoch: 0 },
+			options: { show_resets: true, show_reset_expiry: false },
+			signal: new AbortController().signal,
+			timeoutMs: 1000,
+			fetchCodexUsage: async () => {
 			reads += 1;
-			return codexSnapshot;
+			return { status: "ok", revision: "server:1", snapshot: codexSnapshot };
+			},
 		});
 		globalThis.fetch = (() => {
 			throw new Error("duplicate ChatGPT request must not happen");
 		}) as unknown as typeof fetch;
 
-		const result = await openaiProviderDefinition.fetchUsage({
-			credential: {
-				secret: "selected-access-token",
-				source: "opencode",
-				variant: "openai",
-				epoch: 1,
-				metadata: {
-					accountId: "account-1",
-					type: "oauth",
-					expires: String(Date.now() + 60_000),
-				},
-			},
-			options: { show_resets: true, show_reset_expiry: false },
-			signal: new AbortController().signal,
-			timeoutMs: 1000,
-		});
-
 		expect(reads).toBe(1);
 		expect(result).toEqual(codexSnapshot);
 	});
 
-	test("OpenAI adapter returns StandardUsageProvider and reports missing auth", async () => {
-		mockJsonResponse(openAiFixture());
+	test("OpenAI adapter without host RPC is unsupported and does not fetch directly", async () => {
+		globalThis.fetch = (() => { throw new Error("must not make direct request"); }) as unknown as typeof fetch;
 		const provider = await openAIUsageAdapter.fetchUsage(
-			makeCtx({
-				openai: {
-					access: "tok",
-					accountId: "account-1",
-					type: "oauth",
-					expires: Date.now() + 60_000,
-				},
-			}),
+			makeCtx(),
 			new AbortController().signal,
 		);
 		expect(provider.id).toBe("openai");
-		expect(provider.status).toBe("ready");
-		expect(provider.plan).toBe("prolite");
-		expect(provider.windows[0]?.label).toBe("5h");
-		expect(provider.windows[0]).toMatchObject({
-			period: { kind: "rolling", durationMs: 18_000_000 },
-			usage: { kind: "percent", usedPercent: 1 },
-		});
-		expect(provider.details?.map((detail) => detail.label)).toContain("plan");
-		expect(provider.details?.map((detail) => detail.label)).toContain("credits balance");
-		expect(provider.details?.map((detail) => detail.label)).toContain("has credits");
-		expect(provider.alerts?.[0]?.label).toBe("codex LIMIT");
-		expect(
-			await openAIUsageAdapter.fetchUsage(
-				makeCtx(),
-				new AbortController().signal,
-			),
-		).toMatchObject({ status: "missing-auth", statusText: "auth missing" });
+		expect(provider.status).toBe("unsupported");
 	});
 
-	test("OpenAI subscription request uses OpenCode OAuth account scope headers", async () => {
-		const captured = captureRequest(openAiFixture());
-
+	test("legacy OpenAI adapter does not issue direct endpoint requests", async () => {
+		globalThis.fetch = (() => { throw new Error("must not make direct request"); }) as unknown as typeof fetch;
 		const provider = await openAIUsageAdapter.fetchUsage(
 			makeCtx({
 				openai: {
@@ -115,12 +77,7 @@ describe("provider normalization", () => {
 			new AbortController().signal,
 		);
 
-		expect(provider.status).toBe("ready");
-		expect(captured.url).toBe("https://chatgpt.com/backend-api/wham/usage");
-		expect(captured.headers.Authorization).toBe("Bearer oauth-access");
-		expect(captured.headers["ChatGPT-Account-Id"]).toBe("account-123");
-		expect(captured.headers.Origin).toBe("https://chatgpt.com");
-		expect(captured.headers.Referer).toBe("https://chatgpt.com/");
+		expect(provider.status).toBe("unsupported");
 	});
 
 	test("OpenAI partial endpoint data does not crash", () => {
@@ -159,7 +116,7 @@ describe("provider normalization", () => {
 			timeoutMs: CONFIG_DEFAULTS.request_timeout_ms,
 		});
 
-		expect(result).toMatchObject({ status: "error", statusText: "invalid credential source" });
+		expect(result).toMatchObject({ status: "unsupported", statusText: "Codex host RPC unavailable" });
 	});
 
 	test("Z.AI quota with 3 limits returns standard windows and model breakdown", () => {

@@ -1,6 +1,4 @@
-import { discoverOpenAICredential } from "../auth.js";
-import { fetchCodexSnapshot, normalizeWhamUsage } from "../codex-fetch.js";
-import { sanitizeCredentialError } from "../sanitize.js";
+import { normalizeWhamUsage } from "../codex-fetch.js";
 import { openAIProviderToView } from "../views/openai-view.js";
 import {
 	defineProvider,
@@ -10,7 +8,7 @@ import {
 	type ValidationIssue,
 	type ValidationResult,
 } from "./contracts.js";
-import { createStatusProvider, createTimeoutController } from "./shared.js";
+import { createStatusProvider } from "./shared.js";
 import type {
 	ProviderContext,
 	StandardUsageProvider,
@@ -18,8 +16,6 @@ import type {
 } from "./types.js";
 
 const statusProvider = createStatusProvider("openai", "openai");
-type OpenAIUsageReader = () => Promise<StandardUsageProvider>;
-let openAIUsageReader: OpenAIUsageReader | undefined;
 
 export type OpenAIOptions = Readonly<{
 	show_resets: boolean;
@@ -27,12 +23,6 @@ export type OpenAIOptions = Readonly<{
 }>;
 
 export { normalizeWhamUsage };
-
-export function setOpenAIUsageReader(
-	reader: OpenAIUsageReader | undefined,
-): void {
-	openAIUsageReader = reader;
-}
 
 export const openaiProviderDefinition = defineProvider<OpenAIOptions>({
 	metadata: {
@@ -50,11 +40,10 @@ export const openaiProviderDefinition = defineProvider<OpenAIOptions>({
 		},
 	},
 	credentialPolicy: {
-		allowedSources: ["opencode"],
-		defaultCandidates: [
-			{ source: "opencode", variant: "openai", name: "openai" },
-		],
+		allowedSources: [],
+		defaultCandidates: [],
 	},
+	credentialMode: "none",
 	parseOptions: parseOpenAIOptions,
 	fetchUsage: fetchOpenAIUsage,
 	present: openAIProviderToView,
@@ -76,50 +65,18 @@ async function fetchOpenAIUsage(
 	context: ProviderFetchContext<OpenAIOptions>,
 ): Promise<StandardUsageProvider> {
 	if (context.signal.aborted) return statusProvider("error", "cancelled");
-	if (context.credential.source !== "opencode") {
-		return statusProvider("error", "invalid credential source");
-	}
-	if (context.credential.variant !== "openai") {
-		return statusProvider("error", "invalid credential variant");
-	}
-	if (openAIUsageReader) {
-		try {
-			return await openAIUsageReader();
-		} catch {
-			return statusProvider("error", "Codex statistics temporarily unavailable");
-		}
-	}
-	const accountId = context.credential.metadata?.accountId;
-	const type = context.credential.metadata?.type;
-	const expires = Number(context.credential.metadata?.expires);
-	if (type !== "oauth") return statusProvider("missing-auth", "oauth missing");
-	if (!Number.isFinite(expires) || expires <= Date.now()) {
-		return statusProvider("missing-auth", "oauth expired");
-	}
-	if (!accountId) return statusProvider("missing-auth", "account id missing");
-
-	const controller = createTimeoutController(context.timeoutMs, context.signal);
+	if (!context.fetchCodexUsage) return statusProvider("unsupported", "Codex host RPC unavailable");
 	try {
-		const result = await fetchCodexSnapshot(
-			{
-				connectionID: "active-openai",
-				accountID: accountId,
-				access: context.credential.secret,
-				expires,
-			},
-			context.options,
-			controller.signal,
-		);
+		const reply = await context.fetchCodexUsage({
+			show_resets: context.options.show_resets,
+			show_reset_expiry: context.options.show_reset_expiry,
+			timeout_ms: Math.min(30_000, Math.max(1_000, context.timeoutMs)),
+		}, context.signal);
 		if (context.signal.aborted) return statusProvider("error", "cancelled");
-		if (controller.signal.aborted) return statusProvider("error", "timeout");
-		return result;
-	} catch (error: unknown) {
-		return statusProvider(
-			"error",
-			sanitizeCredentialError(error, context.credential.secret),
-		);
-	} finally {
-		controller.dispose();
+		if (reply.status === "ok") return reply.snapshot;
+		return statusProvider(reply.status, reply.message);
+	} catch {
+		return statusProvider("error", "Codex host RPC unavailable");
 	}
 }
 
@@ -127,27 +84,15 @@ function resolveLegacyOpenAIContext(
 	context: ProviderContext,
 	signal: AbortSignal,
 ) {
-	const credential = discoverOpenAICredential(context.auth, context.env);
-	if (!("token" in credential))
-		return {
-			ok: false as const,
-			status: "missing-auth" as const,
-			message: credential.message,
-		};
 	return {
 		ok: true as const,
 		options: { show_resets: true, show_reset_expiry: false },
 		fetchContext: {
 			credential: {
-				secret: credential.token,
+				secret: "",
 				source: "opencode" as const,
-				variant: "openai",
+				variant: "host-usage",
 				epoch: 0,
-				metadata: {
-					accountId: credential.accountId,
-					type: "oauth",
-					expires: String(credential.expires),
-				},
 			},
 			signal,
 			timeoutMs: context.timeoutMs,

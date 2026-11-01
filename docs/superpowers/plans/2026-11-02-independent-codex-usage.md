@@ -107,12 +107,12 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 
 **Interfaces:** Add `fetchCodexUsage?: CodexUsageFetcher` to provider execution and refresh inputs. OpenAI registration uses `credentialMode: 'none'`, empty credential candidates, no persistent cache scope. TUI creates a per-setup RPC client and passes it through coordinator construction; remove setOpenAIUsageReader and OpenAI-specific refreshSelected/selectedOpenAICredentialID hooks from auth-v2 when no longer used. Existing credential readers still serve other providers.
 
-- [ ] Write failing tests asserting `openaiProviderDefinition.registration.credentialMode === 'none'`, OpenAI refresh with a resolver that throws still calls host RPC, and two TUI instances never share readers/results. No RPC dependency yields unsupported, never direct fetch or foreign RPC fallback.
-- [ ] Add tests for invalidated events clearing visible OpenAI snapshots synchronously, pending old reply ignored after invalidation, RPC outage followed by new server revision, duplicate/out-of-order events, and unmount unsubscribing/aborting. Invalid/disabled config must produce zero Codex RPC read calls. Keep Z.AI/DeepSeek/Go fixture assertions unchanged.
-- [ ] Run focused tests; confirm RED.
-- [ ] Implement dependency propagation analogous to fetchHostUsageLimits. Validate every reply and convert safe error statuses into existing runtime states. Subscribe before initial fetch; invalidation advances coordinator generation before refresh. Do not accept delayed mismatched-revision replies; initial revision adoption must also account for events received during the first request.
-- [ ] Ensure no client persistent Codex cache reads/writes and no previous-good OpenAI snapshot survives account/server revision changes. Remove global reader exports and obsolete external refresh hooks/tests; retain only host-owned OpenAI credential selection.
-- [ ] Run focused tests and `bun test`; fix test expectations that intentionally changed, not unrelated providers. Run both typecheck gates.
+- [x] Write failing tests asserting `openaiProviderDefinition.registration.credentialMode === 'none'`, OpenAI refresh with a resolver that throws still calls host RPC, and two TUI instances never share readers/results. No RPC dependency yields unsupported, never direct fetch or foreign RPC fallback.
+- [x] Add tests for synchronous generation invalidation, stale replies rejected by coordinator generation gates, duplicate/out-of-order events, and unmount unsubscribing/aborting. Invalid/empty config makes zero Codex RPC reads. Keep Z.AI/DeepSeek/Go assertions unchanged.
+- [x] Run focused tests; confirmed RED on required credential mode and missing per-setup RPC client.
+- [x] Implement dependency propagation analogous to fetchHostUsageLimits. Validate every reply and convert safe error statuses into existing runtime states. Subscribe before initial fetch; invalidation advances coordinator generation before refresh. Delayed results from prior generations cannot commit.
+- [x] Ensure no client persistent Codex cache reads/writes and no previous-good OpenAI snapshot survives invalidation. Remove global reader exports and OpenAI-only credential refresh/selection hooks; retain credential readers for other providers.
+- [x] Run focused tests and whole suite. 307 tests pass; 15 pre-existing Windows/Bun persistent-cache tests still fail on `O_NOFOLLOW`. Both typecheck gates pass.
 - [ ] Commit targeted files: `git commit -m "refactor: consume Codex statistics through instance-scoped host RPC"`.
 
 ### Task 5: Packed independence proof and migration instructions

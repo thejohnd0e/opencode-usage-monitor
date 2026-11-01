@@ -129,6 +129,7 @@ function theme(base: string): ResolvedTestTheme {
 describe("TUI runtime cutover", () => {
 	test("injects typed host usage fetch and does not call it after abort or disposal", async () => {
 		let hostCalls = 0;
+		let codexReads = 0;
 		let fetchHostUsageLimits:
 			| ((signal: AbortSignal) => Promise<unknown>)
 			| undefined;
@@ -161,6 +162,13 @@ describe("TUI runtime cutover", () => {
 		});
 		const context = {
 			client: {
+				rpc: () => ({
+				read: async () => {
+					codexReads += 1;
+					return { encoded: JSON.stringify({ status: "unsupported", revision: "fixture", message: "unavailable" }) };
+				},
+				events: { on: () => () => undefined },
+			}),
 				experimental: {
 					usage: {
 						limits: async (_input: unknown, options: { signal?: AbortSignal }) => {
@@ -187,6 +195,81 @@ describe("TUI runtime cutover", () => {
 		await fetchHostUsageLimits(new AbortController().signal).catch(() => undefined);
 
 		expect(hostCalls).toBe(1);
+		expect(codexReads).toBe(0);
+	});
+
+	test("isolates Codex RPC clients per TUI setup and handles invalidation synchronously", async () => {
+		const config = {
+			...resolvedConfig,
+			providers: [{ id: "openai" }],
+		} as unknown as ResolvedUsageConfigV2;
+		const codexFetchers: Array<((input: unknown, signal: AbortSignal) => Promise<unknown>) | undefined> = [];
+		const listeners: Array<((event: { data: { revision: string } }) => void) | undefined> = [];
+		const signalRefs: Array<AbortSignal | undefined> = [];
+		const unsubscribes: number[] = [];
+		const counters = [{ invalidations: 0, refreshes: 0 }, { invalidations: 0, refreshes: 0 }];
+		let instance = 0;
+		const definition = createUsageTuiDefinition({
+			readRuntimeConfig: async () => ({ config, render: { ...CONFIG_DEFAULTS }, providers: {}, fingerprint: "openai" }),
+			createRuntimeCoordinator: (_config, _readers, _host, fetchCodexUsage) => {
+				const index = instance++;
+				codexFetchers.push(fetchCodexUsage as unknown as (input: unknown, signal: AbortSignal) => Promise<unknown>);
+				return {
+					refreshAll: async () => { counters[index]!.refreshes += 1; },
+					refreshProvider: async () => undefined,
+					invalidateCredentials: () => { counters[index]!.invalidations += 1; },
+					reconfigure: () => undefined,
+					getStates: () => [],
+					subscribe: () => () => undefined,
+					dispose: () => undefined,
+				};
+			},
+			createCredentialReader: () => Object.assign(async () => undefined, { invalidate: () => undefined }),
+			watchConfig: () => undefined,
+			createReloadTrigger: (callback) => Object.assign(callback, { cancel: () => undefined }),
+		});
+
+		const makeContext = (revision: string) => ({
+			client: {
+				rpc: () => ({
+					read: async () => ({ encoded: JSON.stringify({
+						status: "ok",
+						revision,
+						snapshot: { id: "openai", displayName: "openai", status: "ready", windows: [], fetchedAt: Date.now() },
+					}) }),
+					events: {
+						on: (_name: string, listener: (event: { data: { revision: string } }) => void, options: { signal: AbortSignal }) => {
+							listeners.push(listener);
+							signalRefs.push(options.signal);
+							return () => { unsubscribes.push(1); };
+						},
+					},
+				}),
+				experimental: { usage: { limits: async () => ({ location: { directory: "/fixture" }, data: null }) } },
+			},
+			data: { on: () => () => undefined },
+			theme: theme("light"),
+			keymap: { layer: () => undefined },
+			ui: { slot: () => () => undefined, toast: { show: () => undefined } },
+		});
+		const cleanupA = await Reflect.apply(definition.setup, undefined, [makeContext("server:A")]);
+		const cleanupB = await Reflect.apply(definition.setup, undefined, [makeContext("server:B")]);
+		const readA = await codexFetchers[0]?.({}, new AbortController().signal) as { revision?: string } | undefined;
+		const readB = await codexFetchers[1]?.({}, new AbortController().signal) as { revision?: string } | undefined;
+		listeners[0]?.({ data: { revision: "event-instance:2" } });
+		listeners[0]?.({ data: { revision: "event-instance:1" } });
+		listeners[0]?.({ data: { revision: "event-instance:2" } });
+		await settle();
+
+		expect(readA?.revision).toBe("server:A");
+		expect(readB?.revision).toBe("server:B");
+		expect(counters[0]?.invalidations).toBe(1);
+		expect(counters[1]?.invalidations).toBe(0);
+		expect(counters[0]?.refreshes).toBe(2);
+		await cleanupA?.();
+		await cleanupB?.();
+		expect(unsubscribes).toHaveLength(2);
+		expect(signalRefs.every((signal) => signal?.aborted)).toBe(true);
 	});
 
 	test("exports V2 definitions with only id and setup fields", () => {
@@ -354,7 +437,12 @@ describe("TUI runtime cutover", () => {
 			createReloadTrigger: (callback) => Object.assign(callback, { cancel: () => undefined }),
 		});
 		const context = {
-			client: {},
+			client: {
+				rpc: () => ({
+					read: async () => ({ encoded: JSON.stringify({ status: "unsupported", revision: "fixture", message: "unavailable" }) }),
+					events: { on: () => () => undefined },
+				}),
+			},
 			data: {
 				on: () => () => { dataDisposals += 1; },
 			},

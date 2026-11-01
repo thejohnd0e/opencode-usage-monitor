@@ -17,6 +17,11 @@ export type CodexReply =
 			message: string;
 	  }>;
 
+export type CodexUsageFetcher = (
+	input: CodexReadInput,
+	signal: AbortSignal,
+) => Promise<CodexReply>;
+
 export const CodexUsage = Rpc.define({
 	id: "usage-monitor.codex",
 	methods: {

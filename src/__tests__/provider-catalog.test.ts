@@ -132,9 +132,9 @@ describe("v2 built-in provider catalog", () => {
 			(entry) => entry.metadata.id === "opencode-go",
 		);
 
-		expect(openai?.credentialPolicy.defaultCandidates).toEqual([
-			{ source: "opencode", variant: "openai", name: "openai" },
-		]);
+		expect(openai?.credentialPolicy.defaultCandidates).toEqual([]);
+		expect(openai?.credentialPolicy.allowedSources).toEqual([]);
+		expect(openai?.credentialMode).toBe("none");
 		expect(zai?.credentialPolicy.defaultCandidates).toEqual([
 			{ source: "opencode", variant: "zai", name: "zai-coding-plan" },
 			{ source: "opencode", variant: "zai", name: "zai" },
