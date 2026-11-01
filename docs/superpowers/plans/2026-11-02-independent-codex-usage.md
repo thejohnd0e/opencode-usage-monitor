@@ -67,12 +67,12 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 
 **Interfaces:** Export `parseCodexServerOptions(input: unknown): { usageCredentialID?: string }` and `resolveCodexAccount(host: Pick<Plugin.Context, 'integration'>, options: { usageCredentialID?: string }): Promise<CodexAccount | undefined>`. `CodexAccount` contains only transient `connectionID`, `accountID`, `access`, `expires`; never refresh tokens or raw host records.
 
-- [ ] Write failing tests `defaults to active connection`, `explicit selection never activates or falls back`, `rejects non-OpenAI/non-OAuth/missing metadata`, and `copies only required credential fields`. Assert resolve called with selected connection and activate never called. Invalid/blank server options fail closed.
-- [ ] Run `bun test src/__tests__/codex-account.test.ts`; verify failures expose missing implementation.
-- [ ] Inspect Promise plugin and RPC declarations for both installed SDK 2.2.5 and fixture SDK 2.0.32. Confirm integration resolve/selection/subscription types. Retain 2.0.32 support if APIs permit; if not, stop and request approval of a new floor before dependency changes. Do not silently align the fixture to 2.2.5.
-- [ ] Implement parser/resolver using host APIs with no activation and no direct renewal. Reject expired/unusable resolved results rather than using an unrelated credential.
-- [ ] Run account tests and `bun run typecheck:host`; add a compile fixture for actual integration/RPC capabilities used. Record compatibility evidence and amend AGENTS.md with the approved statistics-only credential exception.
-- [ ] Commit only Task 1 files after checking staged diff: `git commit -m "feat: resolve Codex statistics credentials through OpenCode"`.
+- [x] Write failing tests `defaults to active connection`, `explicit selection never activates or falls back`, `rejects non-OpenAI/non-OAuth/missing metadata`, and `copies only required credential fields`. Assert resolve called with selected connection and activate never called. Invalid/blank server options fail closed.
+- [x] Run `bun test src/__tests__/codex-account.test.ts`; verify failures expose missing implementation.
+- [x] Inspect Promise plugin and RPC declarations for both installed SDK 2.2.5 and fixture SDK 2.0.32. Confirm integration resolve/selection/subscription types. Retain 2.0.32 support if APIs permit; if not, stop and request approval of a new floor before dependency changes. Do not silently align the fixture to 2.2.5.
+- [x] Implement parser/resolver using host APIs with no activation and no direct renewal. Reject expired/unusable resolved results rather than using an unrelated credential.
+- [x] Run account tests and `bun run typecheck:host`; add a compile fixture for actual integration/RPC capabilities used. Record compatibility evidence and amend AGENTS.md with the approved statistics-only credential exception.
+- [x] Commit only Task 1 files after checking staged diff: `git commit -m "feat: resolve Codex statistics credentials through OpenCode"`.
 
 ### Task 2: Own Codex API parsing and reset details
 
@@ -80,12 +80,12 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 
 **Interfaces:** Export `fetchCodexSnapshot(account: CodexAccount, options: OpenAIOptions, signal: AbortSignal): Promise<StandardUsageProvider>`; preserve/export `normalizeWhamUsage` through its existing import path for existing tests until final adapter cleanup. The collector supplies a bounded signal. Use existing GET endpoints only.
 
-- [ ] Add failing tests for five-hour/weekly values and reset timestamps; count zero; optional details disabled; detail endpoint failure with valid primary usage; 401/403; malformed usage; timeout/abort; secret-bearing errors.
-- [ ] Add table-driven tests `sanitizes reset credits`: available credits only, maximum 100 entries, title maximum 200 characters with control characters removed, finite valid dates only, stable index-based keys for duplicate titles, expired credits excluded. Respect show_resets=false (no count/details) and show_reset_expiry=false (count only).
-- [ ] Run `bun test src/__tests__/codex-fetch.test.ts src/__tests__/openai-resets.test.ts`; confirm RED.
-- [ ] Extract/reuse native parsing and HTTP headers; add bounded credit-detail normalization. Apply `validateAndCloneUsageSnapshot(snapshot, 'openai', { credential: account.access })` before success. Map failures to explicit safe status providers; do not send raw HTTP bodies or error objects onward.
-- [ ] Run the same tests plus `bun test src/__tests__/snapshot-validation.test.ts`; confirm PASS and inspect serialized results for the fixture access secret.
-- [ ] Commit targeted files: `git commit -m "feat: collect Codex usage and reset details on the server"`.
+- [x] Add failing tests for five-hour/weekly values and reset timestamps; count zero; optional details disabled; detail endpoint failure with valid primary usage; 401/403; malformed usage; timeout/abort; secret-bearing errors.
+- [x] Add table-driven tests `sanitizes reset credits`: available credits only, maximum 100 entries, title maximum 200 characters with control characters removed, finite valid dates only, stable index-based keys for duplicate titles, expired credits excluded. Respect show_resets=false (no count/details) and show_reset_expiry=false (count only).
+- [x] Run `bun test src/__tests__/codex-fetch.test.ts src/__tests__/openai-resets.test.ts`; confirm RED.
+- [x] Extract/reuse native parsing and HTTP headers; add bounded credit-detail normalization. Apply `validateAndCloneUsageSnapshot(snapshot, 'openai', { credential: account.access })` before success. Map failures to explicit safe status providers; do not send raw HTTP bodies or error objects onward.
+- [x] Run the same tests plus `bun test src/__tests__/snapshot-validation.test.ts`; confirm PASS and inspect serialized results for the fixture access secret.
+- [x] Commit targeted files: `git commit -m "feat: collect Codex usage and reset details on the server"` (c7fd82e).
 
 ### Task 3: Disposable account-safe collector and RPC
 
@@ -93,12 +93,12 @@ type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise
 
 **Interfaces:** Export `createCodexCollector({ host, options, fetchSnapshot, now? }): { read(input: CodexReadInput, signal: AbortSignal): Promise<CodexReply>; invalidate(): void; dispose(): void }`. `fetchSnapshot` uses Task 2 signature. Define `CodexUsage` RPC ID `usage-monitor.codex`, method `read`, event `invalidated` with `{ revision: string }`. Input/output runtime validation rejects extra fields; timeout_ms integer range 1000..30000. Internal fetch timeout defaults/caps at 8000 ms, bounded further by requested timeout. Cache freshness 60000 ms; failures have a 60000 ms upstream retry cooldown.
 
-- [ ] Write tests for lazy setup (zero network calls), selection failures, response validation, secret-free reply, same-account coalescing, detail-option partitioning, account invalidation during resolve/fetch, stale fallback only within same scope, dispose during pending work, and rejecting invalid RPC input before credential resolution.
-- [ ] Add tests `caller abort does not abort another waiter`, `updated event during resolve does not cause an unbounded refresh loop`, and `cached read still detects changed active connection`. Use deferred promises and fake clocks, not sleeps.
-- [ ] Run `bun test src/__tests__/codex-collector.test.ts src/__tests__/codex-rpc.test.ts`; confirm RED.
-- [ ] Implement server-owned shared requests with waiter-specific cancellation, account+options cache keys, invalidation generations, and pre-publication identity rechecks. Invalidation clears last-good cache and aborts superseded work. Never serve an old-scope result after resolution, even to a waiter already attached to an old request.
-- [ ] Register RPC in server setup; subscribe to credential.updated/switched using an owned abort controller; emit non-secret invalidated events with revision. Avoid emitting events from read itself. Coalesce normal refresh-triggered credential updates and make the collector retryable without notification loops. Return cleanup invalidating before abort/disposal.
-- [ ] Run tests and `bun run typecheck`; verify declared RPC output schema plus canonical validator reject raw/secret-bearing objects.
+- [x] Write tests for lazy setup (zero network calls), selection failures, response validation, secret-free reply, same-account coalescing, detail-option partitioning, account invalidation during resolve/fetch, stale fallback only within same scope, dispose during pending work, and rejecting invalid RPC input before credential resolution.
+- [x] Add tests `caller abort does not abort another waiter`, bounded retry after invalidation during resolution, and cached reads detecting a changed active connection; deferred promises/fake clocks are used.
+- [x] Run `bun test src/__tests__/codex-collector.test.ts src/__tests__/codex-rpc.test.ts`; confirm RED against absent contract/collector modules.
+- [x] Implement server-owned shared requests with waiter-specific cancellation, account+options cache keys, invalidation generations, and pre-publication identity rechecks. Invalidation clears last-good cache and aborts superseded work. Never serve an old-scope result after resolution, even to a waiter already attached to an old request.
+- [x] Register RPC in server setup; subscribe to credential.updated/switched using an owned abort controller; emit non-secret invalidated events with revision. Avoid emitting events from read itself. Retry after invalidation is bounded to one additional resolution; cleanup invalidates before abort/disposal.
+- [x] Run focused tests and both typecheck gates; RPC schema plus canonical validator reject malformed and secret-bearing output.
 - [ ] Commit targeted files: `git commit -m "feat: expose independent account-safe Codex usage RPC"`.
 
 ### Task 4: Route OpenAI through host RPC and isolate TUI state
