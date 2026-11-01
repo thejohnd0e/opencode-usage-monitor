@@ -1,0 +1,144 @@
+# Independent Codex Usage Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make OpenAI/Codex monitoring work with no codex-limits plugin installed, preserving account selection and reset-credit information.
+
+**Architecture:** A disposable server collector resolves OpenCode-owned credentials, fetches and validates Codex data, and serves an internal RPC. The OpenAI provider uses an instance-scoped host dependency instead of reading secrets in the TUI. Server generations and TUI refresh generations prevent prior-account results from being published.
+
+**Tech Stack:** TypeScript, Bun tests/build, OpenCode V2 plugin and RPC APIs, existing canonical snapshot validator and refresh coordinator.
+
+**Spec:** `docs/superpowers/specs/2026-11-02-independent-codex-usage-design.md`
+
+## Global Constraints
+
+- Preserve exports `.` and `./tui` and IDs `usage-monitor`, `usage-monitor.tui`; use no root shims or dual API shapes.
+- No direct OAuth refresh, auth.json reads, dashboard scraping, refresh-token storage, or model-account activation.
+- Default to active OpenAI; optional server option `usageCredentialID` selects a statistics-only connection with no fallback.
+- Automatic intervals never below 60000 ms. Bound requests and cancel owned work on disposal.
+- No secrets/raw credential records/raw upstream payloads in RPC, render state, logs, or persistent cache.
+- Invalid/disabled config starts no provider work. Do not modify other providers' credential paths.
+- Do not remove codex-limits, publish, or change the live installation without separate authorization.
+
+## Review Focus
+
+1. OAuth resolution itself can emit credential.updated: avoid self-triggering refresh loops (Task 3).
+2. Two terminals with different detail options must not share an incompatible snapshot (Task 3).
+3. Server reload or an RPC outage must not resurrect stale prior-account data (Task 4).
+4. A caller cancelling shared work must not break another terminal's request (Task 3).
+5. Credit titles/dates can be hostile, oversized, expired, or duplicated; keep output safe and bounded (Task 2).
+
+## File Structure and Interfaces
+
+- `src/codex-contract.ts`: internal RPC definition `CodexUsage`, request/reply types, runtime reply validation. No public RPC package export.
+- `src/codex-account.ts`: server option parsing and OpenAI connection resolution/projection.
+- `src/codex-fetch.ts`: upstream fetching and normalization, extracted from `src/providers/openai.ts`.
+- `src/codex-collector.ts`: request/cache/generation ownership, subscription invalidation, disposal.
+- `src/index.ts`: server setup and RPC wiring, no network work during registration.
+- `src/providers/openai.ts`: host-backed adapter and options; no global reader or direct TUI network path.
+- `src/providers/contracts.ts`, `src/refresh-contracts.ts`, `src/refresh.ts`: instance-scoped Codex dependency propagation.
+- `src/tui.ts`: RPC client, invalidation subscription and cleanup.
+- `src/__tests__/codex-{account,fetch,collector,rpc}.test.ts`: isolated server-side contracts and races.
+- Existing OpenAI, refresh, TUI lifecycle and package checks: adapt tests to new host-backed contract.
+- `scripts/verify-package.mjs`: packed consumer and isolated host checks without foreign plugin.
+- `AGENTS.md`, `README.md`: selected-credential exception, supported SDK, configuration and migration instructions.
+
+Shared TypeScript interfaces (define in `codex-contract.ts`):
+
+```ts
+type CodexReadInput = Readonly<{
+  show_resets: boolean;
+  show_reset_expiry: boolean;
+  timeout_ms: number;
+}>;
+type CodexReply =
+  | Readonly<{ status: 'ok'; revision: string; snapshot: StandardUsageProvider }>
+  | Readonly<{ status: 'missing-auth' | 'forbidden' | 'error' | 'unsupported'; revision: string; message: string }>;
+type CodexUsageFetcher = (input: CodexReadInput, signal: AbortSignal) => Promise<CodexReply>;
+```
+
+`revision` is an opaque server-instance/generation identifier, not a token/account ID. It changes on account invalidation and server reload. Codex snapshots stay in server memory only; the client must not persist them under the no-credential sentinel.
+
+---
+
+### Task 1: Pin host compatibility and credential selection
+
+**Files:** Create `src/codex-account.ts`, `src/__tests__/codex-account.test.ts`; modify `AGENTS.md`; inspect `.test-types/host-api/package.json` and installed SDK declarations.
+
+**Interfaces:** Export `parseCodexServerOptions(input: unknown): { usageCredentialID?: string }` and `resolveCodexAccount(host: Pick<Plugin.Context, 'integration'>, options: { usageCredentialID?: string }): Promise<CodexAccount | undefined>`. `CodexAccount` contains only transient `connectionID`, `accountID`, `access`, `expires`; never refresh tokens or raw host records.
+
+- [ ] Write failing tests `defaults to active connection`, `explicit selection never activates or falls back`, `rejects non-OpenAI/non-OAuth/missing metadata`, and `copies only required credential fields`. Assert resolve called with selected connection and activate never called. Invalid/blank server options fail closed.
+- [ ] Run `bun test src/__tests__/codex-account.test.ts`; verify failures expose missing implementation.
+- [ ] Inspect Promise plugin and RPC declarations for both installed SDK 2.2.5 and fixture SDK 2.0.32. Confirm integration resolve/selection/subscription types. Retain 2.0.32 support if APIs permit; if not, stop and request approval of a new floor before dependency changes. Do not silently align the fixture to 2.2.5.
+- [ ] Implement parser/resolver using host APIs with no activation and no direct renewal. Reject expired/unusable resolved results rather than using an unrelated credential.
+- [ ] Run account tests and `bun run typecheck:host`; add a compile fixture for actual integration/RPC capabilities used. Record compatibility evidence and amend AGENTS.md with the approved statistics-only credential exception.
+- [ ] Commit only Task 1 files after checking staged diff: `git commit -m "feat: resolve Codex statistics credentials through OpenCode"`.
+
+### Task 2: Own Codex API parsing and reset details
+
+**Files:** Create `src/codex-fetch.ts`, `src/__tests__/codex-fetch.test.ts`; modify `src/providers/openai.ts`, `src/__tests__/openai-resets.test.ts` as necessary for extracted parsing.
+
+**Interfaces:** Export `fetchCodexSnapshot(account: CodexAccount, options: OpenAIOptions, signal: AbortSignal): Promise<StandardUsageProvider>`; preserve/export `normalizeWhamUsage` through its existing import path for existing tests until final adapter cleanup. The collector supplies a bounded signal. Use existing GET endpoints only.
+
+- [ ] Add failing tests for five-hour/weekly values and reset timestamps; count zero; optional details disabled; detail endpoint failure with valid primary usage; 401/403; malformed usage; timeout/abort; secret-bearing errors.
+- [ ] Add table-driven tests `sanitizes reset credits`: available credits only, maximum 100 entries, title maximum 200 characters with control characters removed, finite valid dates only, stable index-based keys for duplicate titles, expired credits excluded. Respect show_resets=false (no count/details) and show_reset_expiry=false (count only).
+- [ ] Run `bun test src/__tests__/codex-fetch.test.ts src/__tests__/openai-resets.test.ts`; confirm RED.
+- [ ] Extract/reuse native parsing and HTTP headers; add bounded credit-detail normalization. Apply `validateAndCloneUsageSnapshot(snapshot, 'openai', { credential: account.access })` before success. Map failures to explicit safe status providers; do not send raw HTTP bodies or error objects onward.
+- [ ] Run the same tests plus `bun test src/__tests__/snapshot-validation.test.ts`; confirm PASS and inspect serialized results for the fixture access secret.
+- [ ] Commit targeted files: `git commit -m "feat: collect Codex usage and reset details on the server"`.
+
+### Task 3: Disposable account-safe collector and RPC
+
+**Files:** Create `src/codex-contract.ts`, `src/codex-collector.ts`, `src/__tests__/codex-collector.test.ts`, `src/__tests__/codex-rpc.test.ts`; modify `src/index.ts`.
+
+**Interfaces:** Export `createCodexCollector({ host, options, fetchSnapshot, now? }): { read(input: CodexReadInput, signal: AbortSignal): Promise<CodexReply>; invalidate(): void; dispose(): void }`. `fetchSnapshot` uses Task 2 signature. Define `CodexUsage` RPC ID `usage-monitor.codex`, method `read`, event `invalidated` with `{ revision: string }`. Input/output runtime validation rejects extra fields; timeout_ms integer range 1000..30000. Internal fetch timeout defaults/caps at 8000 ms, bounded further by requested timeout. Cache freshness 60000 ms; failures have a 60000 ms upstream retry cooldown.
+
+- [ ] Write tests for lazy setup (zero network calls), selection failures, response validation, secret-free reply, same-account coalescing, detail-option partitioning, account invalidation during resolve/fetch, stale fallback only within same scope, dispose during pending work, and rejecting invalid RPC input before credential resolution.
+- [ ] Add tests `caller abort does not abort another waiter`, `updated event during resolve does not cause an unbounded refresh loop`, and `cached read still detects changed active connection`. Use deferred promises and fake clocks, not sleeps.
+- [ ] Run `bun test src/__tests__/codex-collector.test.ts src/__tests__/codex-rpc.test.ts`; confirm RED.
+- [ ] Implement server-owned shared requests with waiter-specific cancellation, account+options cache keys, invalidation generations, and pre-publication identity rechecks. Invalidation clears last-good cache and aborts superseded work. Never serve an old-scope result after resolution, even to a waiter already attached to an old request.
+- [ ] Register RPC in server setup; subscribe to credential.updated/switched using an owned abort controller; emit non-secret invalidated events with revision. Avoid emitting events from read itself. Coalesce normal refresh-triggered credential updates and make the collector retryable without notification loops. Return cleanup invalidating before abort/disposal.
+- [ ] Run tests and `bun run typecheck`; verify declared RPC output schema plus canonical validator reject raw/secret-bearing objects.
+- [ ] Commit targeted files: `git commit -m "feat: expose independent account-safe Codex usage RPC"`.
+
+### Task 4: Route OpenAI through host RPC and isolate TUI state
+
+**Files:** Modify `src/providers/openai.ts`, `src/providers/contracts.ts`, `src/refresh-contracts.ts`, `src/refresh.ts`, `src/tui.ts`; extend `src/__tests__/native-providers.test.ts`, `src/__tests__/refresh.test.ts`, `src/__tests__/tui-lifecycle.test.ts`, `src/__tests__/auth-v2.test.ts` and other affected OpenAI tests.
+
+**Interfaces:** Add `fetchCodexUsage?: CodexUsageFetcher` to provider execution and refresh inputs. OpenAI registration uses `credentialMode: 'none'`, empty credential candidates, no persistent cache scope. TUI creates a per-setup RPC client and passes it through coordinator construction; remove setOpenAIUsageReader and OpenAI-specific refreshSelected/selectedOpenAICredentialID hooks from auth-v2 when no longer used. Existing credential readers still serve other providers.
+
+- [ ] Write failing tests asserting `openaiProviderDefinition.registration.credentialMode === 'none'`, OpenAI refresh with a resolver that throws still calls host RPC, and two TUI instances never share readers/results. No RPC dependency yields unsupported, never direct fetch or foreign RPC fallback.
+- [ ] Add tests for invalidated events clearing visible OpenAI snapshots synchronously, pending old reply ignored after invalidation, RPC outage followed by new server revision, duplicate/out-of-order events, and unmount unsubscribing/aborting. Invalid/disabled config must produce zero Codex RPC read calls. Keep Z.AI/DeepSeek/Go fixture assertions unchanged.
+- [ ] Run focused tests; confirm RED.
+- [ ] Implement dependency propagation analogous to fetchHostUsageLimits. Validate every reply and convert safe error statuses into existing runtime states. Subscribe before initial fetch; invalidation advances coordinator generation before refresh. Do not accept delayed mismatched-revision replies; initial revision adoption must also account for events received during the first request.
+- [ ] Ensure no client persistent Codex cache reads/writes and no previous-good OpenAI snapshot survives account/server revision changes. Remove global reader exports and obsolete external refresh hooks/tests; retain only host-owned OpenAI credential selection.
+- [ ] Run focused tests and `bun test`; fix test expectations that intentionally changed, not unrelated providers. Run both typecheck gates.
+- [ ] Commit targeted files: `git commit -m "refactor: consume Codex statistics through instance-scoped host RPC"`.
+
+### Task 5: Packed independence proof and migration instructions
+
+**Files:** Modify `scripts/verify-package.mjs`, `README.md`, `AGENTS.md`; create `scripts/smoke-independent-codex.mjs`; adjust build/declaration pruning only if required by the internal contract.
+
+**Interfaces:** `bun scripts/smoke-independent-codex.mjs <consumer-directory>` exercises the installed packed package in a disposable isolated host context, with mocked upstream/credential resolution and no codex-limits package. It exits nonzero on contract failures; it never accesses live credentials/config.
+
+- [ ] Extend clean-consumer checks to fail on codex-limits imports/package presence, old global reader export, missing server RPC registration, and TUI requesting a different RPC contract. Test the fixture with no credential.list permission for OpenAI and an expiring OAuth credential refreshed by the host stub.
+- [ ] Run the new check before fixture support; confirm failure proves absent server/TUI integration rather than a generic missing executable.
+- [ ] Implement the isolated host fixture using installed exports and the real RPC serialization/schema path supported by the SDK. Verify 5h/week/reset details, refresh, account switch, cleanup and unchanged model connection. If a full private host cannot be launched in the environment, distinguish mocked package integration from real host smoke and report the missing gate; do not label mocks a live test.
+- [ ] Document server `usageCredentialID`, active default/no-fallback behavior, detail options, supported SDK evidence, failure states, and removal of the foreign dependency. Include backup-first local migration procedure, not an automatic installation edit.
+- [ ] Run sequentially: `bun run typecheck`, `bun run typecheck:host`, `bun test`, `bun run build:all`, `bun run verify:package`. Require zero exit statuses and successful independent packed-consumer checks. Inspect `git diff --check` and full diff for secrets/unrelated changes.
+- [ ] Commit targeted files: `git commit -m "test: verify packed Codex monitoring without external plugins"`.
+
+## Deferred Local Installation Migration (requires authorization)
+
+After gates/review, ask permission to update the local installation; implementation approval alone is not permission to edit the running global configuration. Back up exact wrapper/config files to the approved OpenCode temp directory, copy the verified artifact, replace the external RPC wrapper, move statistics selection from sources.json into usage-monitor's plugin options, enable show_reset_expiry to preserve current detail display, and retain codex-limits unchanged. Use config hot reload or `/reload`; do not restart the service just for config changes. Confirm only non-secret live status/counts and that model-account selection is unchanged. Do not delete old local files or backups.
+
+## Execution and Completion Gates
+
+- [ ] At execution start load the chosen execution skill, create an isolated worktree through using-git-worktrees, and bring these approved documents into it without losing current files.
+- [ ] Execute each task RED → GREEN → targeted commit; track checkboxes here with real verification outcomes.
+- [ ] Request whole-branch review, address actionable feedback, rerun affected gates, and report limitations honestly.
+- [ ] Use verification-before-completion before any completion claim and finishing-a-development-branch for integration choices. Do not publish/merge/remove the external plugin implicitly.
+
+## Plan Self-Review
+
+Spec coverage: selection/compatibility Task 1; native collection/details Task 2; RPC/cache/cancellation Task 3; host-backed TUI/account isolation Task 4; packed independence/documentation Task 5; installation explicitly deferred. All five Review Focus inputs have owned tests. Types/signatures are shared through codex-contract.ts; output validation distinguishes successful canonical snapshots from safe error envelopes. SDK floor mismatch is a blocking compatibility decision, not an assumed dependency upgrade.
