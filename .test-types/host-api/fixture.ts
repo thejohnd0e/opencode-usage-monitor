@@ -1,10 +1,43 @@
 import { Plugin as ServerPlugin } from "@opencode/plugin";
+import { Rpc } from "@opencode/plugin/rpc";
 import { Plugin as TuiPlugin } from "@opencode/plugin/tui";
 import { createElement, insert, setProp, type JSX } from "@opentui/solid";
 
 export const server = ServerPlugin.define({
   id: "fixture.server",
-  setup() {},
+  async setup(context) {
+    const active = await context.integration.connection.active("openai");
+    if (active?.type === "credential") {
+      const credential = await context.integration.connection.resolve(active);
+      if (credential?.type === "oauth") void credential.access;
+    }
+    const integration = await context.integration.get({ integrationID: "openai" });
+    void integration.data.connections;
+
+    const codexUsage = Rpc.define({
+      id: "fixture.codex-usage",
+      methods: {
+        read: {
+          input: { type: "object", properties: {}, additionalProperties: false },
+          output: { type: "object", properties: { status: { type: "string" } }, required: ["status"], additionalProperties: false },
+        },
+      },
+      events: {
+        invalidated: { schema: { type: "object", properties: { revision: { type: "string" } }, required: ["revision"], additionalProperties: false } },
+      },
+    });
+    const registration = await context.rpc.register(codexUsage, {
+      read: async (_input, { signal }) => {
+        void signal.aborted;
+        return { status: "ready" };
+      },
+    });
+    await registration.events.emit("invalidated", { revision: "1" });
+    const abort = new AbortController();
+    for await (const _event of context.event.subscribe({ signal: abort.signal })) break;
+    abort.abort();
+    return () => registration.dispose();
+  },
 });
 
 export const tui = TuiPlugin.define({
